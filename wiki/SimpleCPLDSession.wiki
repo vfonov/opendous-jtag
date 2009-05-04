@@ -1,8 +1,6 @@
-#Programming session of CPLD
-
 = Introduction =
 
-This example works with Coolrunner-II CPLD from Xilinx ( XC2C256 )
+This example was tested with Coolrunner-II CPLD from Xilinx ( XC2C256 )
 
 = Details =
 
@@ -14,4 +12,4 @@ This example works with Coolrunner-II CPLD from Xilinx ( XC2C256 )
   * cable opendous
   * bsdl path <where you have unpacked your bsdl files>
   * detect
-  * svf <your svf file>`
+  * svf <your svf file>
