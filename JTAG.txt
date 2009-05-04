@@ -1,0 +1,1 @@
+This project implmentst MCU part of a simple USB-JTAG converter
