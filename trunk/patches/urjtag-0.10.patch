@@ -1,0 +1,1173 @@
+Index: src/tap/cable.c
+===================================================================
+--- src/tap/cable.c	(revision 1502)
++++ src/tap/cable.c	(working copy)
+@@ -67,6 +67,7 @@
+ extern cable_driver_t xpc_int_cable_driver;
+ extern cable_driver_t xpc_ext_cable_driver;
+ extern cable_driver_t jlink_cable_driver;
++extern cable_driver_t urj_tap_cable_opendous_driver;
+ extern cable_driver_t ep9307_cable_driver;
+ extern cable_driver_t ts7800_cable_driver;
+ 
+@@ -143,6 +144,7 @@
+ #ifdef ENABLE_CABLE_TS7800
+ 	&ts7800_cable_driver,
+ #endif
++  &urj_tap_cable_opendous_driver,
+ 	NULL				/* last must be NULL */
+ };
+ 
+Index: src/tap/cable/generic_usbconn.c
+===================================================================
+--- src/tap/cable/generic_usbconn.c	(revision 1502)
++++ src/tap/cable/generic_usbconn.c	(working copy)
+@@ -37,6 +37,7 @@
+ 
+ #undef VERBOSE
+ 
++extern usbconn_cable_t urj_tap_cable_usbconn_opendous;
+ #ifdef ENABLE_CABLE_XPC
+ extern usbconn_cable_t usbconn_cable_xpc_int;
+ extern usbconn_cable_t usbconn_cable_xpc_ext;
+@@ -89,6 +90,7 @@
+ 
+ usbconn_cable_t *usbconn_cables[] =
+ {
++  &urj_tap_cable_usbconn_opendous,
+ #ifdef ENABLE_CABLE_XPC
+ 	&usbconn_cable_xpc_int,
+ 	&usbconn_cable_xpc_ext,
+Index: src/tap/cable/opendous.c
+===================================================================
+--- src/tap/cable/opendous.c	(revision 0)
++++ src/tap/cable/opendous.c	(revision 0)
+@@ -0,0 +1,534 @@
++/*opendous_
++ * $Id: opendous.c,v 1.8 2003/08/19 08:42:20 telka Exp $
++ *
++ * Opendous cable driver
++ *
++ * Copyright (C) 2009 Vladimir Fonov
++ *
++ * Based on J-Link cable driver by K. Waschk 
++ *
++ * Large portions of code were taken from the OpenOCD driver written by
++ * Juergen Stuber, which in turn was based on Dominic Rath's and Benedikt
++ * Sauter's usbprog.c. Therefore most of this code is actually
++ *
++ * Copyright (C) 2007 Juergen Stuber
++ *
++ * Modified to work in UrJTAG by K. Waschk in 2008.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++ * 02111-1307, USA.
++ *
++ */
++
++
++#include "generic.h"
++#include "generic_usbconn.h"
++
++#include "usbconn.h"
++#include "usbconn/libusb.h"
++
++/* ---------------------------------------------------------------------- */
++
++
++#include "sysdep.h"
++
++#include "cable.h"
++#include "chain.h"
++
++#include "jtag.h"
++
++#include <usb.h>
++#include <string.h>
++
++#define INFO(...)   printf(__VA_ARGS__)
++#define ERROR(...)  printf(__VA_ARGS__)
++#define DEBUG(...)
++
++#define OPENDOUS_WRITE_ENDPOINT 0x02
++#define OPENDOUS_READ_ENDPOINT  0x81
++
++#define OPENDOUS_USB_TIMEOUT     1000
++
++#define OPENDOUS_IN_BUFFER_SIZE  64
++#define OPENDOUS_OUT_BUFFER_SIZE 64
++
++#define OPENDOUS_TAP_BUFFER_SIZE (63*4)
++
++//OPENDOUS JTAG COMNMANDS
++#define JTAG_CMD_TAP_OUTPUT     0x0
++#define JTAG_CMD_SET_TRST       0x1
++#define JTAG_CMD_SET_SRST       0x2
++#define JTAG_CMD_READ_INPUT     0x3
++#define JTAG_CMD_TAP_OUTPUT_EMU 0x4
++#define JTAG_CMD_SET_DELAY      0x5
++
++#define OPENDOUS_MAX_SPEED 66
++
++typedef struct
++{
++    /* Global USB buffers */
++    unsigned char usb_in_buffer[OPENDOUS_IN_BUFFER_SIZE];
++    unsigned char usb_out_buffer[OPENDOUS_OUT_BUFFER_SIZE];
++
++    int tap_length;
++    uint8_t tms_buffer[OPENDOUS_TAP_BUFFER_SIZE];
++
++    int last_tdo;
++}
++opendous_usbconn_data_t;
++
++
++/* Queue command functions */
++static void urj_tap_cable_opendous_reset (libusb_param_t *params,
++                                       int trst, int srst);
++                                       
++static int opendous_simple_command (libusb_param_t *params,
++                                  uint8_t command,uint8_t data);
++
++
++/* J-Link tap buffer functions */
++static void opendous_tap_init (opendous_usbconn_data_t *data);
++static int opendous_tap_execute (libusb_param_t *params);
++static void opendous_tap_append_step (opendous_usbconn_data_t *data, int tms, int tdi);
++
++/* Jlink lowlevel functions */
++static int opendous_usb_message (libusb_param_t *params, int out_length, int in_length);
++static int opendous_usb_write (libusb_param_t *params, unsigned int length);
++static int opendous_usb_read (libusb_param_t *params);
++
++static void opendous_debug_buffer (char *buffer, int length);
++
++/* API functions */
++
++void urj_tap_cable_opendous_set_frequency (cable_t *cable,
++                                        uint32_t frequency);
++
++/***************************************************************************/
++/* Opendous tap functions */
++
++void
++urj_tap_cable_opendous_reset (libusb_param_t *params, int trst,
++                           int srst)
++{
++    DEBUG ("trst: %i, srst: %i\n", trst, srst);
++    /* Signals are active low */
++    if (trst == 0)
++    {
++        opendous_simple_command (params, JTAG_CMD_SET_TRST,1);
++    }
++    else if (trst == 1)
++    {
++        opendous_simple_command (params, JTAG_CMD_SET_TRST,0);
++    }
++
++    if (srst == 0)
++    {
++        opendous_simple_command (params, JTAG_CMD_SET_SRST,1);
++    }
++    else if (srst == 1)
++    {
++        opendous_simple_command (params, JTAG_CMD_SET_SRST,0);
++    }
++}
++
++
++static int
++opendous_simple_command (libusb_param_t *params, uint8_t command,uint8_t _data)
++{
++    int result;
++    opendous_usbconn_data_t *data = params->data;
++
++    //INFO ("simple_command: 0x%02x\n", command);
++
++    data->usb_out_buffer[0] = command;
++    data->usb_out_buffer[1] = _data;
++    result = opendous_usb_write (params, 2);
++
++    if (result != 2)
++    {
++        ERROR ("OPENDOUS writing command 0x%02x failed (%d)\n", command, result);
++    }
++    result = opendous_usb_read (params);
++    if (result != 1)
++    {
++        ERROR ("OPENDOUS reading command 0x%02x failed (%d)\n", command, result);
++    }
++    return data->usb_in_buffer[0];
++}
++
++static int
++opendous_get_status (libusb_param_t *params)
++{
++    //TODO: make some function for reading info
++  
++    return 1;
++}
++
++
++/***************************************************************************/
++
++static void
++opendous_tap_init (opendous_usbconn_data_t *data)
++{
++    data->tap_length = 0;
++}
++
++static void
++opendous_tap_append_step (opendous_usbconn_data_t *data, int tms, int tdi)
++{
++  unsigned char _tms=tms?1:0;
++  unsigned char _tdi=tdi?1:0;
++  
++  int index = data->tap_length/4;
++  int bits  = data->tap_length%4;
++
++  if (data->tap_length < OPENDOUS_TAP_BUFFER_SIZE)
++  {
++
++    if(!bits)
++      data->tms_buffer[index]=0;
++    
++    data->tms_buffer[index]  |= (_tdi<<(bits*2))|(_tms<<(bits*2+1)) ;
++    data->tap_length++;
++  }
++  else
++  {
++    ERROR ("opendous_tap_append_step, overflow\n");
++  }
++}
++
++/* Send a tap sequence to the device, and receive the answer */
++
++static int
++opendous_tap_execute (libusb_param_t *params)
++{
++    opendous_usbconn_data_t *data = params->data;
++    int byte_length,byte_length_out;
++    int i;
++    int result;
++    int bit_length;
++    if (data->tap_length > 0)
++    {
++
++        byte_length =     (data->tap_length+3)/4;
++        byte_length_out = (data->tap_length+7)/8;
++        data->usb_out_buffer[0]=JTAG_CMD_TAP_OUTPUT | ((data->tap_length%4)<<4); //transfer command
++
++        for (i = 0; i < byte_length; i++)
++        {
++            data->usb_out_buffer[i+1] = data->tms_buffer[i];
++        }
++        
++        result = opendous_usb_message (params, byte_length+1, byte_length_out);
++
++        if (result == byte_length_out)
++        {
++          data->last_tdo = (data->usb_in_buffer[byte_length_out - 1])&(1<< (data->tap_length%8) )? 1 : 0;
++          //opendous_debug_buffer(data->usb_in_buffer,byte_length);
++        } else {
++            ERROR ("opendous_tap_execute, wrong result %d, expected %d\n",
++                   result, byte_length_out);
++
++            return -2;
++        }
++        opendous_tap_init (data);
++    }
++    return 0;
++}
++
++/* ---------------------------------------------------------------------- */
++
++/* Send a message and receive the reply. */
++static int
++opendous_usb_message (libusb_param_t *params, int out_length, int in_length)
++{
++    int result;
++
++    result = opendous_usb_write (params, out_length);
++    if (result == out_length)
++    {
++        result = opendous_usb_read (params);
++        if (result == in_length)
++        {
++            return result;
++        } else {
++            ERROR ("OPENDOUS usb_bulk_read failed (requested=%d, result=%d)\n",
++                   in_length, result);
++
++            return -1;
++        }
++    } else {
++        ERROR ("OPENDOUS  usb_bulk_write failed (requested=%d, result=%d)\n",
++               out_length, result);
++
++        return -1;
++    }
++}
++
++/* ---------------------------------------------------------------------- */
++
++/* Write data from out_buffer to USB. */
++static int
++opendous_usb_write (libusb_param_t *params, unsigned int out_length)
++{
++    int result;
++    opendous_usbconn_data_t *data;
++
++    data = params->data;
++
++    if (out_length > OPENDOUS_OUT_BUFFER_SIZE)
++    {
++        ERROR ("opendous_jtag_write illegal out_length=%d (max=%d)\n",
++               out_length, OPENDOUS_OUT_BUFFER_SIZE);
++
++        return -1;
++    }
++
++    //INFO ("Writing:\n");
++    //opendous_debug_buffer (data->usb_out_buffer, out_length);
++    
++    result = usb_bulk_write (params->handle,
++                             OPENDOUS_WRITE_ENDPOINT,
++                             data->usb_out_buffer,
++                             out_length, 
++                             OPENDOUS_USB_TIMEOUT);
++
++    DEBUG ("opendous_usb_write, out_length = %d, result = %d\n", out_length,
++           result);
++    return result;
++}
++
++/* ---------------------------------------------------------------------- */
++
++/* Read data from USB into in_buffer. */
++static int
++opendous_usb_read (libusb_param_t *params)
++{
++    opendous_usbconn_data_t *data = params->data;
++
++    int result = usb_bulk_read (params->handle,
++                                OPENDOUS_READ_ENDPOINT,
++                                data->usb_in_buffer,
++                                OPENDOUS_IN_BUFFER_SIZE,
++                                OPENDOUS_USB_TIMEOUT);
++
++    //DEBUG ("opendous_usb_read, result = %d\n", result);
++    //INFO ("Have read:\n");
++    //opendous_debug_buffer (data->usb_in_buffer, result);
++    return result;
++}
++
++/* ---------------------------------------------------------------------- */
++
++#define BYTES_PER_LINE  16
++
++static void
++opendous_debug_buffer (char *buffer, int length)
++{
++    unsigned char line[81];
++    char s[4];
++    int i;
++    int j;
++
++    for (i = 0; i < length; i += BYTES_PER_LINE)
++    {
++        snprintf (line, 5, "%04x", i);
++        for (j = i; j < i + BYTES_PER_LINE && j < length; j++)
++        {
++            snprintf (s, 4, " %02x", buffer[j]);
++            strcat (line, s);
++        }
++        INFO (line);
++        INFO ("\n");
++    }
++}
++
++/* ---------------------------------------------------------------------- */
++
++static int
++opendous_init (cable_t *cable)
++{
++    int result;
++    libusb_param_t *params;
++    opendous_usbconn_data_t *data;
++
++    params = cable->link.usb->params;
++    params->data = malloc (sizeof (opendous_usbconn_data_t));
++    if (params->data == NULL)
++    {
++        return -1;
++    }
++    data = params->data;
++
++    if (usbconn_open (cable->link.usb))
++        return -1;
++
++    data->last_tdo=0;
++    opendous_tap_init (data);
++
++    INFO ("OPENDOUS JTAG Interface ready\n");
++
++    urj_tap_cable_opendous_set_frequency (cable, 4E6);
++
++    urj_tap_cable_opendous_reset (params, 0, 0);
++
++    return 0;
++}
++
++/* ---------------------------------------------------------------------- */
++
++static void
++opendous_free (cable_t *cable)
++{
++    opendous_usbconn_data_t *data;
++    data = ((libusb_param_t *) (cable->link.usb->params))->data;
++    free (data);
++
++    generic_usbconn_free (cable);
++}
++
++/* ---------------------------------------------------------------------- */
++
++void
++urj_tap_cable_opendous_set_frequency (cable_t *cable, uint32_t frequency)
++{
++    int result;
++    int speed = frequency / 1E3;
++    libusb_param_t *params = cable->link.usb->params;
++    opendous_usbconn_data_t *data = params->data;
++
++    if (1 <= speed && speed <= OPENDOUS_MAX_SPEED)
++    {
++      //TODO: convert speed into delay
++      
++    }
++    else
++    {
++        INFO ("Requested speed %dkHz exceeds maximum of %dkHz, ignored\n",
++              speed, OPENDOUS_MAX_SPEED);
++    }
++}
++
++/* ---------------------------------------------------------------------- */
++
++static void
++opendous_clock (cable_t *cable, int tms, int tdi, int n)
++{
++    int i;
++    libusb_param_t *params = cable->link.usb->params;
++    opendous_usbconn_data_t *data = params->data;
++
++    for (i = 0; i < n; i++)
++    {
++      opendous_tap_append_step (data, tms, tdi);
++      if (data->tap_length >= OPENDOUS_TAP_BUFFER_SIZE)
++          opendous_tap_execute (params);
++    }
++    opendous_tap_execute (params);
++}
++
++/* ---------------------------------------------------------------------- */
++
++static int
++opendous_get_tdo (cable_t *cable)
++{
++  libusb_param_t *params = cable->link.usb->params;
++  opendous_usbconn_data_t *data = params->data;
++
++  // TODO: This is the TDO _before_ last clock occured
++  // ...   Anyone knows how to get the current TDO state?
++
++  return data->last_tdo;
++}
++
++/* ---------------------------------------------------------------------- */
++
++static void
++opendous_copy_out_data (opendous_usbconn_data_t *data, int len, int offset,
++                        char *buf)
++{
++    int i;
++    for (i = 0; i < len; i++)
++    {
++        int bit = (1<<(i&7));
++        int byte = i>>3;
++        buf[offset + i] = (data->usb_in_buffer[byte] & bit) ? 1 : 0;
++    }
++}
++
++static int
++opendous_transfer (cable_t *cable, int len, unsigned char *in, unsigned char *out)
++{
++    int i, j;
++    libusb_param_t *params = cable->link.usb->params;
++    opendous_usbconn_data_t *data = params->data;
++
++    //INFO ("Opendous transfer len:%d\n",len);
++    for (j = 0, i = 0; i < len; i++)
++    {
++        opendous_tap_append_step (data, 0, in[i]);
++
++        if (data->tap_length >= OPENDOUS_TAP_BUFFER_SIZE)
++        {
++            opendous_tap_execute (params);
++            if (out)
++                opendous_copy_out_data (data, i - j, j, out);
++            j = i;
++        }
++    }
++    if (data->tap_length > 0)
++    {
++        opendous_tap_execute (params);
++        if (out)
++            opendous_copy_out_data (data, i - j, j, out);
++    }
++
++    return len;
++}
++
++/* ---------------------------------------------------------------------- */
++
++static int
++opendous_set_signal (cable_t *cable, int mask, int val)
++{
++  
++  return 1; 
++}
++
++cable_driver_t urj_tap_cable_opendous_driver = {
++    "opendous",
++    N_("Opendous based JTAG"),
++    generic_usbconn_connect,
++    generic_disconnect,
++    opendous_free,
++    opendous_init,
++    generic_usbconn_done,
++    urj_tap_cable_opendous_set_frequency,
++    opendous_clock,
++    opendous_get_tdo,
++    opendous_transfer,
++    opendous_set_signal,
++    generic_get_signal,
++    generic_flush_using_transfer,
++    generic_usbconn_help
++};
++
++usbconn_cable_t urj_tap_cable_usbconn_opendous = {
++    "opendous",                 /* cable name */
++    NULL,                       /* string pattern, not used */
++    "libusb",                   /* usbconn driver */
++    0x03eb,                     /* VID */
++    0x204F                      /* PID */
++};
+Index: src/tap/Makefile.am
+===================================================================
+--- src/tap/Makefile.am	(revision 1502)
++++ src/tap/Makefile.am	(working copy)
+@@ -43,7 +43,7 @@
+ 	cable/generic_parport.h \
+ 	cable/generic_parport.c \
+ 	cable/cmd_xfer.h \
+-	cable/cmd_xfer.c
++	cable/cmd_xfer.c 
+ 
+ if ENABLE_CABLE_ARCOM
+ libtap_a_SOURCES += \
+@@ -101,6 +101,13 @@
+ 	cable/jlink.c
+ endif
+ 
++
++if ENABLE_CABLE_OPENDOUS
++libtap_a_SOURCES += \
++  cable/opendous.c 
++endif
++
++
+ if ENABLE_CABLE_XPC
+ libtap_a_SOURCES += \
+ 	cable/xpc.c
+Index: configure.ac
+===================================================================
+--- configure.ac	(revision 1502)
++++ configure.ac	(working copy)
+@@ -468,7 +468,7 @@
+ 
+ # Enable cable drivers
+ AC_DEFUN([DEF_ENABLE_CABLEDRIVERS], [\
+-arcom byteblaster dlc5 ea253 ei012 ft2232 igloo jlink keithkoep lattice mpcbdm triton usbblaster wiggler xpc])
++arcom byteblaster dlc5 ea253 ei012 ft2232 igloo jlink opendous keithkoep lattice mpcbdm triton usbblaster wiggler xpc opendous])
+ AC_DEFUN([DEF_DISABLE_CABLEDRIVERS], [ep9307 jim ts7800])
+ AC_ARG_ENABLE(cable,
+ [AS_HELP_STRING([--enable-cable], [Enable default set or specific cable drivers.])]
+@@ -490,7 +490,7 @@
+     cabledrivers=`echo ${cabledrivers} | $SED -e "s/ft2232//" -e "s/usbblaster//"`
+ ])
+ AS_IF([test "x$HAVELIBUSB" != "xyes"], [
+-    cabledrivers=`echo ${cabledrivers} | $SED -e "s/jlink//" -e "s/xpc//"`
++    cabledrivers=`echo ${cabledrivers} | $SED -e "s/jlink//" -e "s/xpc//" -e "s/opendous//"`
+ ])
+ #
+ enabled_cable_drivers=''
+@@ -504,6 +504,7 @@
+ CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [igloo],       [ENABLE_CABLE_IGLOO])
+ CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [jim],         [ENABLE_JIM])
+ CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [jlink],       [ENABLE_CABLE_JLINK])
++CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [opendous],    [ENABLE_CABLE_OPENDOUS])
+ CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [keithkoep],   [ENABLE_CABLE_KEITHKOEP])
+ CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [lattice],     [ENABLE_CABLE_LATTICE])
+ CHECK_DRIVER([$cabledrivers], [enabled_cable_drivers], [mpcbdm],      [ENABLE_CABLE_MPCBDM])
+Index: po/fr.po
+===================================================================
+--- po/fr.po	(revision 1502)
++++ po/fr.po	(working copy)
+@@ -7,7 +7,7 @@
+ msgstr ""
+ "Project-Id-Version: GNU jtag 0.5.1\n"
+ "Report-Msgid-Bugs-To: marcel@telka.sk\n"
+-"POT-Creation-Date: 2009-04-08 22:49+0200\n"
++"POT-Creation-Date: 2009-04-26 17:16-0400\n"
+ "PO-Revision-Date: 2004-05-10 08:00-0500\n"
+ "Last-Translator: Michel Robitaille <robitail@IRO.UMontreal.CA>\n"
+ "Language-Team: French <traduc@traduc.org>\n"
+@@ -1135,7 +1135,7 @@
+ msgstr "Cable inconnue: %s\n"
+ 
+ #: src/cmd/cable.c:98 src/tap/cable/ft2232.c:1580
+-#: src/tap/cable/generic_parport.c:82 src/tap/cable/generic_usbconn.c:223
++#: src/tap/cable/generic_parport.c:82 src/tap/cable/generic_usbconn.c:225
+ #: src/tap/cable/jim.c:68 src/tap/cable/usbblaster.c:79
+ #: src/tap/cable/vision_ep9307.c:201 src/tap/cable/wiggler.c:195
+ #, c-format
+@@ -2738,7 +2738,7 @@
+ msgid "Flash not supported!\n"
+ msgstr "Flash non support�!\n"
+ 
+-#: src/flash/flash.c:104 src/flash/flash.c:265 src/flash/flash.c:391
++#: src/flash/flash.c:104 src/flash/flash.c:265 src/flash/flash.c:393
+ #, c-format
+ msgid "no flash driver found\n"
+ msgstr "aucun pilote de flahs rep�r�\n"
+@@ -2844,51 +2844,51 @@
+ "Done.\n"
+ msgstr "adr: 0x%08X"
+ 
+-#: src/flash/flash.c:396
++#: src/flash/flash.c:401
+ #, c-format
+ msgid ""
+ "\n"
+ "Erasing %d Flash block%s from address 0x%x\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:401
++#: src/flash/flash.c:412
+ #, c-format
+ msgid "(%d%% Completed) FLASH Block %d : Unlocking ... "
+ msgstr ""
+ 
+-#: src/flash/flash.c:404
++#: src/flash/flash.c:415
+ #, c-format
+ msgid "Erasing ... "
+ msgstr ""
+ 
+-#: src/flash/flash.c:410
++#: src/flash/flash.c:421
+ #, c-format
+ msgid "(100%% Completed) FLASH Block %d : Unlocking ... Erasing ... Ok.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:412
++#: src/flash/flash.c:423
+ #, c-format
+ msgid "Ok."
+ msgstr ""
+ 
+-#: src/flash/flash.c:414
++#: src/flash/flash.c:425
+ #, c-format
+ msgid "%78s"
+ msgstr ""
+ 
+-#: src/flash/flash.c:419
++#: src/flash/flash.c:430
+ #, c-format
+ msgid "ERROR.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:425
++#: src/flash/flash.c:435
+ #, c-format
+ msgid ""
+ "\n"
+ "Erasing Completed.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:427
++#: src/flash/flash.c:437
+ #, c-format
+ msgid ""
+ "\n"
+@@ -3009,7 +3009,7 @@
+ "%s #%s\n"
+ "\n"
+ "Copyright (C) 2002, 2003 ETC s.r.o.\n"
+-"Copyright (C) 2007, 2008 Kolja Waschk and the respective authors\n"
++"Copyright (C) 2007, 2008, 2009 Kolja Waschk and the respective authors\n"
+ msgstr ""
+ 
+ #: src/jtag.c:384
+@@ -3037,7 +3037,7 @@
+ "\n"
+ "%s #%s\n"
+ "Copyright (C) 2002, 2003 ETC s.r.o.\n"
+-"Copyright (C) 2007, 2008 Kolja Waschk and the respective authors\n"
++"Copyright (C) 2007, 2008, 2009 Kolja Waschk and the respective authors\n"
+ "\n"
+ "%s is free software, covered by the GNU General Public License, and you are\n"
+ "welcome to change it and/or distribute copies of it under certain "
+@@ -3235,37 +3235,37 @@
+ "Cable du port parall�le de chargement Altera ByteBlaster/ByteBlaster II/"
+ "ByteBlasterMV"
+ 
+-#: src/tap/cable.c:175
++#: src/tap/cable.c:177
+ #, c-format
+ msgid "Failed to allocate memory for cable activity queue.\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:220
++#: src/tap/cable.c:222
+ #, c-format
+ msgid "Out of memory: couldn't resize activity queue to %d\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:225
++#: src/tap/cable.c:227
+ #, c-format
+ msgid "(Resized JTAG activity queue to hold max %d items)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:405 src/tap/cable.c:463
++#: src/tap/cable.c:407 src/tap/cable.c:465
+ #, c-format
+ msgid "Internal error: Got wrong type of result from queue (%d? %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:469
++#: src/tap/cable.c:471
+ #, c-format
+ msgid "Internal error: Got wrong signal's value from queue (%d? %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:523
++#: src/tap/cable.c:525
+ #, c-format
+ msgid "Internal error: Got wrong type of result from queue (#%d %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:529
++#: src/tap/cable.c:531
+ #, c-format
+ msgid "Internal error: Wanted transfer result but none was queued\n"
+ msgstr ""
+@@ -3338,7 +3338,7 @@
+ msgstr ""
+ 
+ #: src/tap/cable/ft2232.c:1950
+-msgid "TinCanTools Flyswatter Cable"
++msgid "TinCanTools Flyswatter (FT2232) Cable"
+ msgstr ""
+ 
+ #: src/tap/cable/ft2232.c:1982
+@@ -3378,12 +3378,12 @@
+ "\n"
+ msgstr ""
+ 
+-#: src/tap/cable/generic_usbconn.c:217
++#: src/tap/cable/generic_usbconn.c:219
+ #, c-format
+ msgid "Couldn't connect to suitable USB device.\n"
+ msgstr ""
+ 
+-#: src/tap/cable/generic_usbconn.c:253
++#: src/tap/cable/generic_usbconn.c:255
+ #, c-format
+ msgid ""
+ "Usage: cable %s [vid=VID] [pid=PID] [desc=DESC] [...]\n"
+Index: po/rw.po
+===================================================================
+--- po/rw.po	(revision 1502)
++++ po/rw.po	(working copy)
+@@ -16,7 +16,7 @@
+ msgstr ""
+ "Project-Id-Version: jtag 0.5.1\n"
+ "Report-Msgid-Bugs-To: marcel@telka.sk\n"
+-"POT-Creation-Date: 2009-04-08 22:49+0200\n"
++"POT-Creation-Date: 2009-04-26 17:16-0400\n"
+ "PO-Revision-Date: 2005-04-04 10:55-0700\n"
+ "Last-Translator: Steven Michael Murphy <murf@e-tools.com>\n"
+ "Language-Team: Kinyarwanda <translation-team-rw@lists.sourceforge.net>\n"
+@@ -1128,7 +1128,7 @@
+ msgstr "Ukwihuza Ubwoko"
+ 
+ #: src/cmd/cable.c:98 src/tap/cable/ft2232.c:1580
+-#: src/tap/cable/generic_parport.c:82 src/tap/cable/generic_usbconn.c:223
++#: src/tap/cable/generic_parport.c:82 src/tap/cable/generic_usbconn.c:225
+ #: src/tap/cable/jim.c:68 src/tap/cable/usbblaster.c:79
+ #: src/tap/cable/vision_ep9307.c:201 src/tap/cable/wiggler.c:195
+ #, c-format
+@@ -2599,7 +2599,7 @@
+ msgid "Flash not supported!\n"
+ msgstr "OYA"
+ 
+-#: src/flash/flash.c:104 src/flash/flash.c:265 src/flash/flash.c:391
++#: src/flash/flash.c:104 src/flash/flash.c:265 src/flash/flash.c:393
+ #, fuzzy, c-format
+ msgid "no flash driver found\n"
+ msgstr "Oya Umurabyo Musomyi:"
+@@ -2696,51 +2696,51 @@
+ "Done.\n"
+ msgstr "Aderesi"
+ 
+-#: src/flash/flash.c:396
++#: src/flash/flash.c:401
+ #, c-format
+ msgid ""
+ "\n"
+ "Erasing %d Flash block%s from address 0x%x\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:401
++#: src/flash/flash.c:412
+ #, c-format
+ msgid "(%d%% Completed) FLASH Block %d : Unlocking ... "
+ msgstr ""
+ 
+-#: src/flash/flash.c:404
++#: src/flash/flash.c:415
+ #, c-format
+ msgid "Erasing ... "
+ msgstr ""
+ 
+-#: src/flash/flash.c:410
++#: src/flash/flash.c:421
+ #, c-format
+ msgid "(100%% Completed) FLASH Block %d : Unlocking ... Erasing ... Ok.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:412
++#: src/flash/flash.c:423
+ #, c-format
+ msgid "Ok."
+ msgstr ""
+ 
+-#: src/flash/flash.c:414
++#: src/flash/flash.c:425
+ #, c-format
+ msgid "%78s"
+ msgstr ""
+ 
+-#: src/flash/flash.c:419
++#: src/flash/flash.c:430
+ #, c-format
+ msgid "ERROR.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:425
++#: src/flash/flash.c:435
+ #, c-format
+ msgid ""
+ "\n"
+ "Erasing Completed.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:427
++#: src/flash/flash.c:437
+ #, c-format
+ msgid ""
+ "\n"
+@@ -2867,7 +2867,7 @@
+ "%s #%s\n"
+ "\n"
+ "Copyright (C) 2002, 2003 ETC s.r.o.\n"
+-"Copyright (C) 2007, 2008 Kolja Waschk and the respective authors\n"
++"Copyright (C) 2007, 2008, 2009 Kolja Waschk and the respective authors\n"
+ msgstr ""
+ 
+ #: src/jtag.c:384
+@@ -2895,7 +2895,7 @@
+ "\n"
+ "%s #%s\n"
+ "Copyright (C) 2002, 2003 ETC s.r.o.\n"
+-"Copyright (C) 2007, 2008 Kolja Waschk and the respective authors\n"
++"Copyright (C) 2007, 2008, 2009 Kolja Waschk and the respective authors\n"
+ "\n"
+ "%s is free software, covered by the GNU General Public License, and you are\n"
+ "welcome to change it and/or distribute copies of it under certain "
+@@ -3070,37 +3070,37 @@
+ "Altera ByteBlaster/ByteBlaster II/ByteBlasterMV Parallel Port Download Cable"
+ msgstr ""
+ 
+-#: src/tap/cable.c:175
++#: src/tap/cable.c:177
+ #, c-format
+ msgid "Failed to allocate memory for cable activity queue.\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:220
++#: src/tap/cable.c:222
+ #, c-format
+ msgid "Out of memory: couldn't resize activity queue to %d\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:225
++#: src/tap/cable.c:227
+ #, c-format
+ msgid "(Resized JTAG activity queue to hold max %d items)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:405 src/tap/cable.c:463
++#: src/tap/cable.c:407 src/tap/cable.c:465
+ #, c-format
+ msgid "Internal error: Got wrong type of result from queue (%d? %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:469
++#: src/tap/cable.c:471
+ #, c-format
+ msgid "Internal error: Got wrong signal's value from queue (%d? %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:523
++#: src/tap/cable.c:525
+ #, c-format
+ msgid "Internal error: Got wrong type of result from queue (#%d %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:529
++#: src/tap/cable.c:531
+ #, c-format
+ msgid "Internal error: Wanted transfer result but none was queued\n"
+ msgstr ""
+@@ -3173,7 +3173,7 @@
+ msgstr ""
+ 
+ #: src/tap/cable/ft2232.c:1950
+-msgid "TinCanTools Flyswatter Cable"
++msgid "TinCanTools Flyswatter (FT2232) Cable"
+ msgstr ""
+ 
+ #: src/tap/cable/ft2232.c:1982
+@@ -3213,12 +3213,12 @@
+ "\n"
+ msgstr ""
+ 
+-#: src/tap/cable/generic_usbconn.c:217
++#: src/tap/cable/generic_usbconn.c:219
+ #, c-format
+ msgid "Couldn't connect to suitable USB device.\n"
+ msgstr ""
+ 
+-#: src/tap/cable/generic_usbconn.c:253
++#: src/tap/cable/generic_usbconn.c:255
+ #, c-format
+ msgid ""
+ "Usage: cable %s [vid=VID] [pid=PID] [desc=DESC] [...]\n"
+Index: po/sk.po
+===================================================================
+--- po/sk.po	(revision 1502)
++++ po/sk.po	(working copy)
+@@ -7,7 +7,7 @@
+ msgstr ""
+ "Project-Id-Version: jtag 0.5.1\n"
+ "Report-Msgid-Bugs-To: marcel@telka.sk\n"
+-"POT-Creation-Date: 2009-04-08 22:49+0200\n"
++"POT-Creation-Date: 2009-04-26 17:16-0400\n"
+ "PO-Revision-Date: 2003-10-08 21:25+0200\n"
+ "Last-Translator: Marcel Telka <marcel@telka.sk>\n"
+ "Language-Team: Slovak <sk-i18n@lists.linux.sk>\n"
+@@ -1165,7 +1165,7 @@
+ msgstr "Neznámy kábel: %s\n"
+ 
+ #: src/cmd/cable.c:98 src/tap/cable/ft2232.c:1580
+-#: src/tap/cable/generic_parport.c:82 src/tap/cable/generic_usbconn.c:223
++#: src/tap/cable/generic_parport.c:82 src/tap/cable/generic_usbconn.c:225
+ #: src/tap/cable/jim.c:68 src/tap/cable/usbblaster.c:79
+ #: src/tap/cable/vision_ep9307.c:201 src/tap/cable/wiggler.c:195
+ #, c-format
+@@ -2754,7 +2754,7 @@
+ msgid "Flash not supported!\n"
+ msgstr "Nepodporovaná flash pamäť!\n"
+ 
+-#: src/flash/flash.c:104 src/flash/flash.c:265 src/flash/flash.c:391
++#: src/flash/flash.c:104 src/flash/flash.c:265 src/flash/flash.c:393
+ #, c-format
+ msgid "no flash driver found\n"
+ msgstr "ovládač pre flash pamäť nebol nájdený\n"
+@@ -2860,51 +2860,51 @@
+ "Done.\n"
+ msgstr "adresa: 0x%08X"
+ 
+-#: src/flash/flash.c:396
++#: src/flash/flash.c:401
+ #, c-format
+ msgid ""
+ "\n"
+ "Erasing %d Flash block%s from address 0x%x\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:401
++#: src/flash/flash.c:412
+ #, c-format
+ msgid "(%d%% Completed) FLASH Block %d : Unlocking ... "
+ msgstr ""
+ 
+-#: src/flash/flash.c:404
++#: src/flash/flash.c:415
+ #, c-format
+ msgid "Erasing ... "
+ msgstr ""
+ 
+-#: src/flash/flash.c:410
++#: src/flash/flash.c:421
+ #, c-format
+ msgid "(100%% Completed) FLASH Block %d : Unlocking ... Erasing ... Ok.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:412
++#: src/flash/flash.c:423
+ #, c-format
+ msgid "Ok."
+ msgstr ""
+ 
+-#: src/flash/flash.c:414
++#: src/flash/flash.c:425
+ #, c-format
+ msgid "%78s"
+ msgstr ""
+ 
+-#: src/flash/flash.c:419
++#: src/flash/flash.c:430
+ #, c-format
+ msgid "ERROR.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:425
++#: src/flash/flash.c:435
+ #, c-format
+ msgid ""
+ "\n"
+ "Erasing Completed.\n"
+ msgstr ""
+ 
+-#: src/flash/flash.c:427
++#: src/flash/flash.c:437
+ #, c-format
+ msgid ""
+ "\n"
+@@ -3025,7 +3025,7 @@
+ "%s #%s\n"
+ "\n"
+ "Copyright (C) 2002, 2003 ETC s.r.o.\n"
+-"Copyright (C) 2007, 2008 Kolja Waschk and the respective authors\n"
++"Copyright (C) 2007, 2008, 2009 Kolja Waschk and the respective authors\n"
+ msgstr ""
+ 
+ #: src/jtag.c:384
+@@ -3053,7 +3053,7 @@
+ "\n"
+ "%s #%s\n"
+ "Copyright (C) 2002, 2003 ETC s.r.o.\n"
+-"Copyright (C) 2007, 2008 Kolja Waschk and the respective authors\n"
++"Copyright (C) 2007, 2008, 2009 Kolja Waschk and the respective authors\n"
+ "\n"
+ "%s is free software, covered by the GNU General Public License, and you are\n"
+ "welcome to change it and/or distribute copies of it under certain "
+@@ -3239,37 +3239,37 @@
+ msgstr ""
+ "JTAG kábel Altera ByteBlaster/ByteBlaster II/ByteBlasterMV pre paralelný port"
+ 
+-#: src/tap/cable.c:175
++#: src/tap/cable.c:177
+ #, c-format
+ msgid "Failed to allocate memory for cable activity queue.\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:220
++#: src/tap/cable.c:222
+ #, c-format
+ msgid "Out of memory: couldn't resize activity queue to %d\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:225
++#: src/tap/cable.c:227
+ #, c-format
+ msgid "(Resized JTAG activity queue to hold max %d items)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:405 src/tap/cable.c:463
++#: src/tap/cable.c:407 src/tap/cable.c:465
+ #, c-format
+ msgid "Internal error: Got wrong type of result from queue (%d? %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:469
++#: src/tap/cable.c:471
+ #, c-format
+ msgid "Internal error: Got wrong signal's value from queue (%d? %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:523
++#: src/tap/cable.c:525
+ #, c-format
+ msgid "Internal error: Got wrong type of result from queue (#%d %p.%d)\n"
+ msgstr ""
+ 
+-#: src/tap/cable.c:529
++#: src/tap/cable.c:531
+ #, c-format
+ msgid "Internal error: Wanted transfer result but none was queued\n"
+ msgstr ""
+@@ -3342,7 +3342,7 @@
+ msgstr ""
+ 
+ #: src/tap/cable/ft2232.c:1950
+-msgid "TinCanTools Flyswatter Cable"
++msgid "TinCanTools Flyswatter (FT2232) Cable"
+ msgstr ""
+ 
+ #: src/tap/cable/ft2232.c:1982
+@@ -3382,12 +3382,12 @@
+ "\n"
+ msgstr ""
+ 
+-#: src/tap/cable/generic_usbconn.c:217
++#: src/tap/cable/generic_usbconn.c:219
+ #, c-format
+ msgid "Couldn't connect to suitable USB device.\n"
+ msgstr ""
+ 
+-#: src/tap/cable/generic_usbconn.c:253
++#: src/tap/cable/generic_usbconn.c:255
+ #, c-format
+ msgid ""
+ "Usage: cable %s [vid=VID] [pid=PID] [desc=DESC] [...]\n"
