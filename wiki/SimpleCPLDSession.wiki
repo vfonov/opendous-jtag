@@ -9,7 +9,7 @@ This example was tested with Coolrunner-II CPLD from Xilinx ( XC2C256 )
   * Run iMPACT and SVF file as a target
   * Program virtual device, creaing an svf file
   * Start urjtag and do following commands: 
-  * cable opendous
-  * bsdl path <where you have unpacked your bsdl files>
-  * detect
-  * svf <your svf file>
+    * `cable opendous`
+    * `bsdl path <where you have unpacked your bsdl files>`
+    * `detect`
+    * `svf <your svf file>`
