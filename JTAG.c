@@ -12,7 +12,7 @@
     Based on LUFA demo applications by Dean Camera and Denver Gingerich.
 */
 
-#include "JTAG2.h"
+#include "JTAG.h"
 
 #ifdef DEBUG
 #include <LUFA/Drivers/AT90USBXXX/Serial_Stream.h>
@@ -119,11 +119,13 @@ uint8_t jtag_tap_output(const uint8_t *out_buffer, uint16_t out_length, uint8_t 
                | (tdi<<JTAG_PIN_TDI)
                | (tms<<JTAG_PIN_TMS);
 
-    if(jtag_delay>0) _delay_loop_1(jtag_delay);
+    //if(jtag_delay>0) _delay_loop_1(jtag_delay);
+    
 
     JTAG_OUT|=JTAG_CLK_HI;//CLK hi
 
-    _delay_loop_1(jtag_delay+JTAG_DELAY2);
+    asm("nop");
+    //_delay_loop_1(jtag_delay+JTAG_DELAY2);
 
     JTAG_OUT&=JTAG_CLK_LO;//CLK lo
     uint8_t data=JTAG_IN;
