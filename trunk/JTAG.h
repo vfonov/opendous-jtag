@@ -8,12 +8,12 @@
 */
 
 /*
-    JTAG2 
+    JTAG 
     Based on LUFA demo applications by Dean Camera and Denver Gingerich.
 */
 
-#ifndef _JTAG2_H_
-#define _JTAG2_H_
+#ifndef _JTAG_H_
+#define _JTAG_H_
 
 	/* Includes: */
 	#include <avr/io.h>
@@ -45,4 +45,4 @@
 
 	/* Function Prototypes: */
 
-#endif //JTAG2
+#endif //JTAG
