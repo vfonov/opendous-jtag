@@ -42,7 +42,7 @@ Index: src/tap/cable/opendous.c
 ===================================================================
 --- src/tap/cable/opendous.c	(revision 0)
 +++ src/tap/cable/opendous.c	(revision 0)
-@@ -0,0 +1,534 @@
+@@ -0,0 +1,775 @@
 +/*opendous_
 + * $Id: opendous.c,v 1.8 2003/08/19 08:42:20 telka Exp $
 + *
@@ -109,7 +109,11 @@ Index: src/tap/cable/opendous.c
 +#define OPENDOUS_IN_BUFFER_SIZE  64
 +#define OPENDOUS_OUT_BUFFER_SIZE 64
 +
-+#define OPENDOUS_TAP_BUFFER_SIZE (63*4)
++#define OPENDOUS_TAP_BUFFER_SIZE (63)
++#define OPENDOUS_SCHEDULE_BUFFER_SIZE 1024
++
++
++#undef DEBUG_TRANSFER_STATS
 +
 +//OPENDOUS JTAG COMNMANDS
 +#define JTAG_CMD_TAP_OUTPUT     0x0
@@ -123,16 +127,24 @@ Index: src/tap/cable/opendous.c
 +
 +typedef struct
 +{
-+    /* Global USB buffers */
-+    unsigned char usb_in_buffer[OPENDOUS_IN_BUFFER_SIZE];
-+    unsigned char usb_out_buffer[OPENDOUS_OUT_BUFFER_SIZE];
++  /* Global USB buffers */
++  unsigned char usb_in_buffer[OPENDOUS_IN_BUFFER_SIZE];
++  unsigned char usb_out_buffer[OPENDOUS_OUT_BUFFER_SIZE];
 +
-+    int tap_length;
-+    uint8_t tms_buffer[OPENDOUS_TAP_BUFFER_SIZE];
-+
-+    int last_tdo;
++  int tap_length;
++  uint8_t tms_buffer[OPENDOUS_TAP_BUFFER_SIZE];
++  int last_tdo;
++  
++  uint8_t schedule_tap[OPENDOUS_SCHEDULE_BUFFER_SIZE];
++  uint8_t schedule_tdo[OPENDOUS_SCHEDULE_BUFFER_SIZE];
++  int schedule_tap_length;
++  
 +}
 +opendous_usbconn_data_t;
++
++#ifdef DEBUG_TRANSFER_STATS
++FILE *debug_log=0;
++#endif //DEBUG_TRANSFER_STATS
 +
 +
 +/* Queue command functions */
@@ -231,6 +243,13 @@ Index: src/tap/cable/opendous.c
 +}
 +
 +static void
++opendous_schedule_tap_init (opendous_usbconn_data_t *data)
++{
++    data->schedule_tap_length = 0;
++}
++
++
++static void
 +opendous_tap_append_step (opendous_usbconn_data_t *data, int tms, int tdi)
 +{
 +  unsigned char _tms=tms?1:0;
@@ -239,7 +258,7 @@ Index: src/tap/cable/opendous.c
 +  int index = data->tap_length/4;
 +  int bits  = data->tap_length%4;
 +
-+  if (data->tap_length < OPENDOUS_TAP_BUFFER_SIZE)
++  if (index < OPENDOUS_TAP_BUFFER_SIZE)
 +  {
 +
 +    if(!bits)
@@ -254,6 +273,31 @@ Index: src/tap/cable/opendous.c
 +  }
 +}
 +
++static void
++opendous_schedule_tap_append_step (opendous_usbconn_data_t *data, int tms, int tdi)
++{
++  unsigned char _tms=tms?1:0;
++  unsigned char _tdi=tdi?1:0;
++  
++  int index = data->schedule_tap_length/4;
++  int bits  = data->schedule_tap_length%4;
++
++  if (index < OPENDOUS_SCHEDULE_BUFFER_SIZE)
++  {
++
++    if(!bits)
++      data->schedule_tap[index]=0;
++    
++    data->schedule_tap[index]  |= (_tdi<<(bits*2))|(_tms<<(bits*2+1)) ;
++    data->schedule_tap_length++;
++  }
++  else
++  {
++    ERROR ("schedule_opendous_tap_append_step, overflow\n");
++  }
++}
++
++
 +/* Send a tap sequence to the device, and receive the answer */
 +
 +static int
@@ -264,6 +308,7 @@ Index: src/tap/cable/opendous.c
 +    int i;
 +    int result;
 +    int bit_length;
++    //if(debug_log) fprintf (debug_log,"TAP execute:%d\n",data->tap_length);
 +    if (data->tap_length > 0)
 +    {
 +
@@ -292,6 +337,64 @@ Index: src/tap/cable/opendous.c
 +    }
 +    return 0;
 +}
++
++static int
++opendous_schedule_flush (libusb_param_t *params)
++{
++    opendous_usbconn_data_t *data = params->data;
++    int byte_length,byte_length_out;
++    int i;
++    int result;
++    int bit_length=data->schedule_tap_length;
++#ifdef DEBUG_TRANSFER_STATS  
++    if(debug_log) fprintf (debug_log,"f:%d\t",data->schedule_tap_length);
++#endif //DEBUG_TRANSFER_STATS  
++    int out_offset=0;
++    int in_offset=0;
++    while(bit_length>0)
++    {
++
++        byte_length = (bit_length+3)/4;
++      
++        if(byte_length<(OPENDOUS_IN_BUFFER_SIZE-2))     
++        {
++          byte_length_out = (bit_length+7)/8;
++          data->usb_out_buffer[0]=JTAG_CMD_TAP_OUTPUT | ((bit_length%4)<<4); //transfer command
++          bit_length=0;
++        } else {
++          byte_length=(OPENDOUS_IN_BUFFER_SIZE-2);
++          data->usb_out_buffer[0]=JTAG_CMD_TAP_OUTPUT ; //transfer command
++          
++          bit_length-=(OPENDOUS_IN_BUFFER_SIZE-2)*4;
++          byte_length_out = (OPENDOUS_IN_BUFFER_SIZE-2)/2;
++        }
++
++        //for (i = 0; i < byte_length; i++)
++        //{
++        //   data->usb_out_buffer[i+1] = data->tms_buffer[i+out_offset];
++        //}
++        memmove(data->usb_out_buffer+1,data->schedule_tap+in_offset,byte_length);
++        in_offset+=byte_length;
++        
++        result = opendous_usb_message (params, byte_length+1, byte_length_out);
++
++        if (result == byte_length_out)
++        {
++          //data->last_tdo = (data->usb_in_buffer[byte_length_out - 1])&(1<< (data->tap_length%8) )? 1 : 0;
++          //opendous_debug_buffer(data->usb_in_buffer,byte_length);
++          memmove(data->schedule_tdo+out_offset,data->usb_in_buffer,byte_length_out);
++          out_offset+=byte_length_out;
++        } else {
++            ERROR ("opendous_schedule_flush, wrong result %d, expected %d\n",
++                   result, byte_length_out);
++
++            return -2;
++        }
++    }
++    opendous_schedule_tap_init (data);
++    return 0;
++}
++
 +
 +/* ---------------------------------------------------------------------- */
 +
@@ -413,7 +516,8 @@ Index: src/tap/cable/opendous.c
 +    params->data = malloc (sizeof (opendous_usbconn_data_t));
 +    if (params->data == NULL)
 +    {
-+        return -1;
++      fprintf(stderr,"Can't allocate memory for opendous!\n");
++      return -1;
 +    }
 +    data = params->data;
 +
@@ -423,11 +527,15 @@ Index: src/tap/cable/opendous.c
 +    data->last_tdo=0;
 +    opendous_tap_init (data);
 +
-+    INFO ("OPENDOUS JTAG Interface ready\n");
++    //INFO ("OPENDOUS JTAG Interface ready\n");
 +
 +    urj_tap_cable_opendous_set_frequency (cable, 4E6);
 +
 +    urj_tap_cable_opendous_reset (params, 0, 0);
++    
++#ifdef DEBUG_TRANSFER_STATS    
++    debug_log=fopen("/tmp/Debug-log.txt","at");
++#endif     
 +
 +    return 0;
 +}
@@ -440,7 +548,10 @@ Index: src/tap/cable/opendous.c
 +    opendous_usbconn_data_t *data;
 +    data = ((libusb_param_t *) (cable->link.usb->params))->data;
 +    free (data);
-+
++#ifdef DEBUG_TRANSFER_STATS  
++    if(debug_log) fclose(debug_log);
++    debug_log=NULL;
++#endif //DEBUG_TRANSFER_STATS  
 +    generic_usbconn_free (cable);
 +}
 +
@@ -474,15 +585,27 @@ Index: src/tap/cable/opendous.c
 +    int i;
 +    libusb_param_t *params = cable->link.usb->params;
 +    opendous_usbconn_data_t *data = params->data;
-+
 +    for (i = 0; i < n; i++)
 +    {
 +      opendous_tap_append_step (data, tms, tdi);
-+      if (data->tap_length >= OPENDOUS_TAP_BUFFER_SIZE)
++      if (data->tap_length >= (OPENDOUS_TAP_BUFFER_SIZE*4))
 +          opendous_tap_execute (params);
 +    }
 +    opendous_tap_execute (params);
 +}
++
++static void
++opendous_schedule_clock (cable_t *cable, int tms, int tdi, int n)
++{
++    int i;
++    libusb_param_t *params = cable->link.usb->params;
++    opendous_usbconn_data_t *data = params->data;
++    for (i = 0; i < n; i++)
++    {
++      opendous_schedule_tap_append_step (data, tms, tdi);
++    }
++}
++
 +
 +/* ---------------------------------------------------------------------- */
 +
@@ -491,15 +614,12 @@ Index: src/tap/cable/opendous.c
 +{
 +  libusb_param_t *params = cable->link.usb->params;
 +  opendous_usbconn_data_t *data = params->data;
-+
 +  // TODO: This is the TDO _before_ last clock occured
 +  // ...   Anyone knows how to get the current TDO state?
-+
 +  return data->last_tdo;
 +}
 +
 +/* ---------------------------------------------------------------------- */
-+
 +static void
 +opendous_copy_out_data (opendous_usbconn_data_t *data, int len, int offset,
 +                        char *buf)
@@ -525,7 +645,7 @@ Index: src/tap/cable/opendous.c
 +    {
 +        opendous_tap_append_step (data, 0, in[i]);
 +
-+        if (data->tap_length >= OPENDOUS_TAP_BUFFER_SIZE)
++        if (data->tap_length >= OPENDOUS_TAP_BUFFER_SIZE*4)
 +        {
 +            opendous_tap_execute (params);
 +            if (out)
@@ -539,9 +659,25 @@ Index: src/tap/cable/opendous.c
 +        if (out)
 +            opendous_copy_out_data (data, i - j, j, out);
 +    }
-+
 +    return len;
 +}
++
++static int
++opendous_schedule_transfer (cable_t *cable, int len, unsigned char *in)
++{
++    int i, j;
++    libusb_param_t *params = cable->link.usb->params;
++    opendous_usbconn_data_t *data = params->data;
++
++    for (j = 0, i = 0; i < len; i++)
++    {
++        opendous_schedule_tap_append_step (data, 0, in[i]);
++
++    }
++    return len;
++}
++
++
 +
 +/* ---------------------------------------------------------------------- */
 +
@@ -551,6 +687,112 @@ Index: src/tap/cable/opendous.c
 +  
 +  return 1; 
 +}
++
++static void
++opendous_flush( cable_t *cable, cable_flush_amount_t how_much )
++{
++  libusb_param_t *params = cable->link.usb->params;
++  opendous_usbconn_data_t *data=(opendous_usbconn_data_t*)params->data;
++  
++	if (how_much == OPTIONALLY) return;
++  if (how_much == TO_OUTPUT && cable->done.num_items>0) return;
++  
++  opendous_schedule_tap_init(data);
++#ifdef DEBUG_TRANSFER_STATS  
++  if(debug_log) fprintf (debug_log,"ff:%d %d\t",how_much,cable->todo.num_items);  
++#endif //DEBUG_TRANSFER_STATS
++  
++	while (cable->todo.num_items > 0) //???
++	{
++		int i, j, n;
++
++		for (j = i = cable->todo.next_item, n = 0; n < cable->todo.num_items; n++)
++		{
++
++			switch (cable->todo.data[i].action)
++			{
++			case CABLE_CLOCK:
++				opendous_schedule_clock( cable,
++				                           cable->todo.data[i].arg.clock.tms,
++				                           cable->todo.data[i].arg.clock.tdi,
++				                           cable->todo.data[i].arg.clock.n );
++				break;
++
++			case CABLE_GET_TDO:
++        break;
++
++			case CABLE_TRANSFER:
++				opendous_schedule_transfer( cable,
++                                    cable->todo.data[i].arg.transfer.len,
++                                    cable->todo.data[i].arg.transfer.in);
++				break;
++
++			default:
++				break;
++			}
++
++			i++;
++			if (i >= cable->todo.max_items)
++				i = 0;
++		}
++    
++
++		opendous_schedule_flush(params);
++    int bit_pos=0;
++		while (j != i)
++		{
++			switch (cable->todo.data[j].action)
++			{
++			case CABLE_GET_TDO:
++				{
++					int m;
++					m = cable_add_queue_item( cable, &(cable->done) );
++					cable->done.data[m].action = CABLE_GET_TDO;
++					cable->done.data[m].arg.value.val = data->schedule_tdo[bit_pos/8]&(1<<(bit_pos%8))?1:0;
++					break;
++				}
++      case CABLE_CLOCK:
++        bit_pos+=cable->todo.data[j].arg.clock.n;
++        break;
++			case CABLE_TRANSFER:
++				{
++					free( cable->todo.data[j].arg.transfer.in );
++					if (cable->todo.data[j].arg.transfer.out)
++					{
++            int k;
++						int m = cable_add_queue_item( cable, &(cable->done) );
++						if (m < 0)
++							fprintf(stderr,"out of memory!\n");
++            
++						cable->done.data[m].action = CABLE_TRANSFER;
++						cable->done.data[m].arg.xferred.len = cable->todo.data[j].arg.transfer.len;
++						cable->done.data[m].arg.xferred.res = 0;
++            
++						cable->done.data[m].arg.xferred.out = cable->todo.data[j].arg.transfer.out;
++            for(k=0;k< cable->todo.data[j].arg.transfer.len;k++)
++            {
++              int offset=bit_pos+k;
++              cable->todo.data[j].arg.transfer.out[k]=data->schedule_tdo[offset/8]&(1<<(offset%8))?1:0;
++            }
++					}
++          bit_pos+=cable->todo.data[j].arg.transfer.len;
++				}
++			default:
++				break;
++			}
++
++			j++;
++			if (j >= cable->todo.max_items)
++				j = 0;
++			cable->todo.num_items--;
++		}
++    
++    data->last_tdo = (data->schedule_tdo[bit_pos/8])&(1<<(bit_pos%8))? 1 : 0;
++		cable->todo.next_item = i;
++	}
++  
++}
++
 +
 +cable_driver_t urj_tap_cable_opendous_driver = {
 +    "opendous",
@@ -565,8 +807,7 @@ Index: src/tap/cable/opendous.c
 +    opendous_get_tdo,
 +    opendous_transfer,
 +    opendous_set_signal,
-+    generic_get_signal,
-+    generic_flush_using_transfer,
++    opendous_flush,
 +    generic_usbconn_help
 +};
 +
