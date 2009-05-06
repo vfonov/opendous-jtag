@@ -8,7 +8,7 @@
 */
 
 /*
-    JTAG2 
+    JTAG
     Based on LUFA demo applications by Dean Camera and Denver Gingerich.
 */
 
@@ -20,7 +20,7 @@
 #endif //DEBUG
 
 /* Project Tags, for reading out using the ButtLoad project */
-BUTTLOADTAG(ProjName,     "JTAG2 App");
+BUTTLOADTAG(ProjName,     "JTAG App");
 BUTTLOADTAG(BuildTime,    __TIME__);
 BUTTLOADTAG(BuildDate,    __DATE__);
 BUTTLOADTAG(LUFAVersion, "LUFA V" LUFA_VERSION_STRING);
