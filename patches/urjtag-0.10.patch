@@ -42,7 +42,7 @@ Index: src/tap/cable/opendous.c
 ===================================================================
 --- src/tap/cable/opendous.c	(revision 0)
 +++ src/tap/cable/opendous.c	(revision 0)
-@@ -0,0 +1,775 @@
+@@ -0,0 +1,786 @@
 +/*opendous_
 + * $Id: opendous.c,v 1.8 2003/08/19 08:42:20 telka Exp $
 + *
@@ -749,6 +749,17 @@ Index: src/tap/cable/opendous.c
 +					m = cable_add_queue_item( cable, &(cable->done) );
 +					cable->done.data[m].action = CABLE_GET_TDO;
 +					cable->done.data[m].arg.value.val = data->schedule_tdo[bit_pos/8]&(1<<(bit_pos%8))?1:0;
++					break;
++				}
++			case CABLE_GET_SIGNAL:
++				{
++					int m = cable_add_queue_item( cable, &(cable->done) );
++					cable->done.data[m].action = CABLE_GET_SIGNAL;
++					cable->done.data[m].arg.value.sig = cable->todo.data[j].arg.value.sig;
++					if (cable->todo.data[j].arg.value.sig == CS_TRST)
++						cable->done.data[m].arg.value.val = 1;
++					else
++						cable->done.data[m].arg.value.val = -1; // not supported yet
 +					break;
 +				}
 +      case CABLE_CLOCK:
