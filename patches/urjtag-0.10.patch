@@ -38,11 +38,24 @@ Index: src/tap/cable/generic_usbconn.c
  #ifdef ENABLE_CABLE_XPC
  	&usbconn_cable_xpc_int,
  	&usbconn_cable_xpc_ext,
+Index: src/tap/cable/usbblaster.c
+===================================================================
+--- src/tap/cable/usbblaster.c	(revision 1502)
++++ src/tap/cable/usbblaster.c	(working copy)
+@@ -85,7 +85,7 @@
+ 		cable->link.usb->driver->free( cable->link.usb );
+ 		return 4;
+ 	}
+-
++ 
+ 	cx_cmd_init( &(cable_params->cmd_root) );
+ 
+ 	/* exchange generic cable parameters with our private parameter set */
 Index: src/tap/cable/opendous.c
 ===================================================================
 --- src/tap/cable/opendous.c	(revision 0)
 +++ src/tap/cable/opendous.c	(revision 0)
-@@ -0,0 +1,786 @@
+@@ -0,0 +1,788 @@
 +/*opendous_
 + * $Id: opendous.c,v 1.8 2003/08/19 08:42:20 telka Exp $
 + *
@@ -123,7 +136,7 @@ Index: src/tap/cable/opendous.c
 +#define JTAG_CMD_TAP_OUTPUT_EMU 0x4
 +#define JTAG_CMD_SET_DELAY      0x5
 +
-+#define OPENDOUS_MAX_SPEED 66
++#define OPENDOUS_MAX_SPEED 4000
 +
 +typedef struct
 +{
@@ -245,7 +258,7 @@ Index: src/tap/cable/opendous.c
 +static void
 +opendous_schedule_tap_init (opendous_usbconn_data_t *data)
 +{
-+    data->schedule_tap_length = 0;
++    data->schedule_tap_length =  0;
 +}
 +
 +
@@ -633,7 +646,7 @@ Index: src/tap/cable/opendous.c
 +    }
 +}
 +
-+static int
++static void
 +opendous_transfer (cable_t *cable, int len, unsigned char *in, unsigned char *out)
 +{
 +    int i, j;
@@ -783,10 +796,11 @@ Index: src/tap/cable/opendous.c
 +            for(k=0;k< cable->todo.data[j].arg.transfer.len;k++)
 +            {
 +              int offset=bit_pos+k;
-+              cable->todo.data[j].arg.transfer.out[k]=data->schedule_tdo[offset/8]&(1<<(offset%8))?1:0;
++              cable->todo.data[j].arg.transfer.out[k]=
++								data->schedule_tdo[offset/8]&(1<<(offset%8))?1:0;
 +            }
 +					}
-+          bit_pos+=cable->todo.data[j].arg.transfer.len;
++					bit_pos+=cable->todo.data[j].arg.transfer.len;
 +				}
 +			default:
 +				break;
@@ -818,6 +832,7 @@ Index: src/tap/cable/opendous.c
 +    opendous_get_tdo,
 +    opendous_transfer,
 +    opendous_set_signal,
++		generic_get_signal,
 +    opendous_flush,
 +    generic_usbconn_help
 +};
