@@ -85,7 +85,7 @@ Index: src/jtag/opendous.c
 ===================================================================
 --- src/jtag/opendous.c	(revision 0)
 +++ src/jtag/opendous.c	(revision 0)
-@@ -0,0 +1,830 @@
+@@ -0,0 +1,842 @@
 +/***************************************************************************
 + *                                                                         *
 + *   Copyright (C) 2009 by Vladimir Fonov <vladimir.fonov@gmai.com>        * 
@@ -144,7 +144,7 @@ Index: src/jtag/opendous.c
 +#define OPENDOUS_WRITE_ENDPOINT	  0x02
 +#define OPENDOUS_READ_ENDPOINT    0x81
 +
-+#define OPENDOUS_USB_TIMEOUT	    200
++#define OPENDOUS_USB_TIMEOUT	   	1000
 +
 +#define OPENDOUS_IN_BUFFER_SIZE	  64
 +#define OPENDOUS_OUT_BUFFER_SIZE  64
@@ -155,13 +155,13 @@ Index: src/jtag/opendous.c
 +
 +/* Constants for OPENDOUS command */
 +
-+#define OPENDOUS_MAX_SPEED 66
++#define OPENDOUS_MAX_SPEED 				66
 +#define OPENDOUS_MAX_TAP_TRANSMIT 62  //even number is easier to handle
-+#define OPENDOUS_MAX_INPUT_DATA  (62*4)
++#define OPENDOUS_MAX_INPUT_DATA   (OPENDOUS_MAX_TAP_TRANSMIT*4)
 +
-+#define OPENDOUS_TAP_BUFFER_SIZE 4096
++#define OPENDOUS_TAP_BUFFER_SIZE 65536
 +
-+#define MAX_PENDING_SCAN_RESULTS 4096
++#define MAX_PENDING_SCAN_RESULTS (OPENDOUS_MAX_INPUT_DATA)
 +
 +//JTAG usb commans
 +#define JTAG_CMD_TAP_OUTPUT     0x0
@@ -170,6 +170,7 @@ Index: src/jtag/opendous.c
 +#define JTAG_CMD_READ_INPUT     0x3
 +#define JTAG_CMD_TAP_OUTPUT_EMU 0x4
 +#define JTAG_CMD_SET_DELAY      0x5
++#define JTAG_CMD_SET_SRST_TRST  0x6
 +
 +
 +/* External interface functions */
@@ -379,8 +380,7 @@ Index: src/jtag/opendous.c
 +  //reset the board
 +  
 +  //usb_control_msg(opendous_jtag_handle, (REQDIR_DEVICETOHOST | REQTYPE_VENDOR | REQTYPE_STANDARD), 1, 0, 0, &dummy, 1, OPENDOUS_USB_TIMEOUT);
-+
-+
++	
 +	check_cnt = 0;
 +	while (check_cnt < 3)
 +	{
@@ -398,6 +398,8 @@ Index: src/jtag/opendous.c
 +
 +	opendous_reset(0, 0);
 +	opendous_tap_init();
++	//opendous_simple_command ( JTAG_CMD_SET_DELAY,255 );
++
 +
 +	return ERROR_OK;
 +}
@@ -526,15 +528,7 @@ Index: src/jtag/opendous.c
 +    LOG_DEBUG("trst: %i, srst: %i", trst, srst);
 +  
 +    /* Signals are active low */
-+    if (trst == 0)
-+    {
-+        opendous_simple_command ( JTAG_CMD_SET_TRST,1);
-+    }
-+    else if (trst == 1)
-+    {
-+        opendous_simple_command ( JTAG_CMD_SET_TRST,0);
-+    }
-+
++/*
 +    if (srst == 0)
 +    {
 +        opendous_simple_command ( JTAG_CMD_SET_SRST,1);
@@ -543,6 +537,19 @@ Index: src/jtag/opendous.c
 +    {
 +        opendous_simple_command ( JTAG_CMD_SET_SRST,0);
 +    }
++
++    if (trst == 0)
++    {
++        opendous_simple_command ( JTAG_CMD_SET_TRST,1);
++    }
++    else if (trst == 1)
++    {
++        opendous_simple_command ( JTAG_CMD_SET_TRST,0);
++    }*/
++
++		srst=srst?0:1;
++		trst=trst?0:2;
++		opendous_simple_command ( JTAG_CMD_SET_SRST_TRST,srst|trst );
 +}
 +
 +void opendous_simple_command(u8 command,uint8_t _data)
@@ -650,15 +657,15 @@ Index: src/jtag/opendous.c
 +	unsigned char _tms=tms?1:0;
 +	unsigned char _tdi=tdi?1:0;
 +  
-+	int index = tap_length/4;
-+	int bits  = tap_length%4;
++	int index =  tap_length/4;
++	int bits  = (tap_length%4)*2;
 +
 +	if (tap_length < OPENDOUS_TAP_BUFFER_SIZE)
 +	{
 +	    if(!bits)
 +					tms_buffer[index]=0;
 +
-+      tms_buffer[index]  |= (_tdi<<(bits*2))|(_tms<<(bits*2+1)) ;
++      tms_buffer[index]  |= (_tdi<<bits)|(_tms<<(bits+1)) ;
 +	    tap_length++;
 +	}
 +	else
@@ -702,7 +709,7 @@ Index: src/jtag/opendous.c
 +	{
 +
 +	    //memset(tdo_buffer,0,OPENDOUS_TAP_BUFFER_SIZE);
-+	    LOG_INFO("OPENDOUS tap execute %d",tap_length);
++	    //LOG_INFO("OPENDOUS tap execute %d",tap_length);
 +	    byte_length =     (tap_length+3)/4;
 +	    byte_length_out = (tap_length+7)/8;
 +
@@ -725,7 +732,9 @@ Index: src/jtag/opendous.c
 +				 }
 +
 +				 memmove(usb_out_buffer+1,tms_buffer+j,transmit);
++				 //LOG_INFO("OPENDOUS sending %d",1 + transmit);
 +				 result = opendous_usb_message(opendous_jtag_handle, 1 + transmit, recieve);
++				 //LOG_INFO("OPENDOUS got %d",result);
 +				 if(result!=recieve)
 +				 {
 +						 LOG_ERROR("opendous_tap_execute, wrong result %d, expected %d", result, recieve);
@@ -738,7 +747,10 @@ Index: src/jtag/opendous.c
 +	    }
 +    
 +    result=byte_length_out;
-+    //opendous_debug_buffer(tdo_buffer,result);
++#ifdef _DEBUG_USB_COMMS_
++    LOG_DEBUG("OPENDOUS tap result %d",result);
++    opendous_debug_buffer(tdo_buffer,result);
++#endif
 +    //LOG_INFO("OPENDOUS tap execute %d",tap_length);
 +    for (i = 0; i < pending_scan_results_length; i++)
 +    {
@@ -754,7 +766,7 @@ Index: src/jtag/opendous.c
 +      DEBUG_JTAG_IO("pending scan result, length = %d", length);
 +
 +#ifdef _DEBUG_USB_COMMS_
-+      opendous_debug_buffer(buffer, byte_length);
++      //opendous_debug_buffer(buffer, byte_length_out);
 +#endif
 +
 +      if (jtag_read_buffer(buffer, command) != ERROR_OK)
@@ -776,7 +788,7 @@ Index: src/jtag/opendous.c
 +}
 +
 +/*****************************************************************************/
-+/* JLink USB low-level functions */
++/* Opendous USB low-level functions */
 +
 +opendous_jtag_t* opendous_usb_open()
 +{
@@ -874,7 +886,7 @@ Index: src/jtag/opendous.c
 +	DEBUG_JTAG_IO("opendous_usb_write, out_length = %d, result = %d", out_length, result);
 +
 +#ifdef _DEBUG_USB_COMMS_
-+	opendous_debug_buffer(usb_out_buffer, out_length);
++	//opendous_debug_buffer(usb_out_buffer, out_length);
 +#endif
 +	return result;
 +}
@@ -889,7 +901,7 @@ Index: src/jtag/opendous.c
 +	DEBUG_JTAG_IO("opendous_usb_read, result = %d", result);
 +
 +#ifdef _DEBUG_USB_COMMS_
-+	opendous_debug_buffer(usb_in_buffer, result);
++	//opendous_debug_buffer(usb_in_buffer, result);
 +#endif
 +	return result;
 +}
@@ -916,3 +928,29 @@ Index: src/jtag/opendous.c
 +	}
 +}
 +//#endif
+Index: src/target/interface/opendous.cfg
+===================================================================
+--- src/target/interface/opendous.cfg	(revision 0)
++++ src/target/interface/opendous.cfg	(revision 0)
+@@ -0,0 +1 @@
++interface opendous
+Index: src/Makefile.am
+===================================================================
+--- src/Makefile.am	(revision 1454)
++++ src/Makefile.am	(working copy)
+@@ -59,11 +59,15 @@
+ if VSLLINK
+ LIBUSB = -lusb
+ else
++if OPENDOUS
++LIBUSB = -lusb
++else
+ LIBUSB =
+ endif
+ endif
+ endif
+ endif
++endif
+ 
+ openocd_LDADD = $(top_builddir)/src/xsvf/libxsvf.a $(top_builddir)/src/svf/libsvf.a \
+ 	$(top_builddir)/src/target/libtarget.a $(top_builddir)/src/jtag/libjtag.a \
