@@ -74,8 +74,9 @@ LIBUSBSRC_ROOT_LIN = /usr/lib
 
 
 # MCU name
-MCU = at90usb162
+MCU = at90usb162 
 
+#MCU = atmega32u4 
 
 # Target board (see library BoardTypes.h documentation, USER or blank for projects not requiring
 # LUFA board drivers). If USER is selected, put custom board drivers in a directory called 

@@ -136,7 +136,7 @@ USB_Descriptor_String_t ManufacturerString PROGMEM =
  */
 USB_Descriptor_String_t ProductString PROGMEM =
 {
-	Header:                 {Size: USB_STRING_LEN(13), Type: DTYPE_String},
+	Header:                 {Size: USB_STRING_LEN(8), Type: DTYPE_String},
 
 	UnicodeString:          L"LUFA JTAG"
 };
