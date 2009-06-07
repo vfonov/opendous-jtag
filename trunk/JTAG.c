@@ -265,8 +265,8 @@ int main(void)
 	PORTD = 0;
 	DDRB = 0;
 	PORTB = 0;
-	DDRC |= ((0 << PC2) | (0 << PC4) | (0 << PC5) | (0 << PC6) | (0 << PC7));  //AT90USBxx2
-	PORTC |= ((0 << PC2) | (0 << PC4) | (0 << PC5) | (0 << PC6) | (0 << PC7)); //AT90USBxx2
+	//DDRC |= ((0 << PC2) | (0 << PC4) | (0 << PC5) | (0 << PC6) | (0 << PC7));  //AT90USBxx2
+	//PORTC |= ((0 << PC2) | (0 << PC4) | (0 << PC5) | (0 << PC6) | (0 << PC7)); //AT90USBxx2
 	#if (BOARD == BOARD_USBKEY)
 		DDRA = 0;
 		PORTA = 0;
@@ -280,7 +280,7 @@ int main(void)
   
   //HWB
   DDRD = 1;
-  PORTD = (1 << PB7); // only PB7(HWB) should be High as this is the bootloader pin
+  PORTD = (1 << 7); // only PB7(HWB) should be High as this is the bootloader pin
 
   jtag_init();
 

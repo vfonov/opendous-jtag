@@ -2,9 +2,9 @@
 Signature = "$Chicago$"
 provider  = %manufacturer%
 DriverVer = 03/20/2007,0.1.12.1
-CatalogFile = AVRopendous_LoopBack_Demo.cat
-CatalogFile.NT = AVRopendous_LoopBack_Demo.cat
-CatalogFile.NTAMD64 = AVRopendous_LoopBack_Demo_x64.cat
+CatalogFile = AVRopendous_JTAG.cat
+CatalogFile.NT = AVRopendous_JTAG.cat
+CatalogFile.NTAMD64 = AVRopendous_JTAG_x64.cat
 
 Class = LibUsbDevices
 ClassGUID = {EB781AAF-9C70-4523-A5DF-642A87ECA567}
@@ -119,13 +119,13 @@ ServiceBinary  = %12%\libusb0.sys
 ;--------------------------------------------------------------------------
 
 [Devices]
-"LoopBack Demo"=LIBUSB_DEV, USB\VID_03eb&PID_0000
+"LUFA JTAG"=LIBUSB_DEV, USB\VID_03eb&PID_204F
 
 [Devices.NT]
-"LoopBack Demo"=LIBUSB_DEV, USB\VID_03eb&PID_0000
+"LUFA JTAG"=LIBUSB_DEV, USB\VID_03eb&PID_204F
 
 [Devices.NTAMD64]
-"LoopBack Demo"=LIBUSB_DEV, USB\VID_03eb&PID_0000
+"LUFA JTAG"=LIBUSB_DEV, USB\VID_03eb&PID_204F
 
 
 ;--------------------------------------------------------------------------
