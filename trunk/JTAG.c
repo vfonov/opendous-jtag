@@ -13,6 +13,8 @@
 */
 
 #include "JTAG.h"
+#include "jtag_defs.h"
+#include "jtag_functions.h"
 
 #ifdef DEBUG
 #include <LUFA/Drivers/AT90USBXXX/Serial_Stream.h>
@@ -37,216 +39,8 @@ uint8_t  dataFromHost[IN_EP_SIZE];
 uint8_t  dataToHost[OUT_EP_SIZE];
 uint16_t dataFromHostSize=0;
 uint16_t dataToHostSize=0;
-uint16_t jtag_delay=0;
 
 volatile uint8_t resetJtagTransfers=0;
-
-//jtag i/o pins
-#define JTAG_OUT PORTB
-#define JTAG_IN  PINB
-#define JTAG_DIR DDRB
-
-//ouput pins
-#define JTAG_PIN_TDI  0
-#define JTAG_PIN_TMS  1
-#define JTAG_PIN_TRST 2
-#define JTAG_PIN_SRST 3
-#define JTAG_PIN_TCK  4
-//input pins
-#define JTAG_PIN_TDO  5
-#define JTAG_PIN_EMU  6
-#define JTAG_PIN_RTCK 5
-
-//JTAG usb commands
-//TODO: ADD commands to deal with RTCK ?
-//TODO: maybe add commands to query some firmware info...
-#define JTAG_CMD_TAP_OUTPUT     0x0
-#define JTAG_CMD_SET_TRST       0x1
-#define JTAG_CMD_SET_SRST       0x2
-#define JTAG_CMD_READ_INPUT     0x3
-#define JTAG_CMD_TAP_OUTPUT_EMU 0x4
-#define JTAG_CMD_SET_DELAY      0x5
-#define JTAG_CMD_SET_SRST_TRST  0x6
-
-//JTAG usb command mask
-#define JTAG_CMD_MASK       0x0f
-#define JTAG_DATA_MASK      0xf0
-
-//JTAG pins masks
-#define JTAG_OUTPUT_MASK ((1<<JTAG_PIN_TDI)|(1<<JTAG_PIN_TMS)|(1<<JTAG_PIN_TRST)|(1<<JTAG_PIN_SRST)|(1<<JTAG_PIN_TCK))
-#define JTAG_INPUT_MASK  ((1<<JTAG_PIN_TDO)|(1<<JTAG_PIN_EMU)|(1<<JTAG_PIN_RTCK))
-#define JTAG_SIGNAL_MASK ((1<<JTAG_PIN_TDI)|(1<<JTAG_PIN_TMS))
-
-#define JTAG_CLK_LO  ~(1<<JTAG_PIN_TCK)
-#define JTAG_CLK_HI   (1<<JTAG_PIN_TCK)
-
-//additional delay to make clk hi and lo approximately the same length, not sure if this is really needed
-#define JTAG_DELAY2 20
-
-//! initialize JTAG interface
-void jtag_init(void)
-{
-  JTAG_OUT=JTAG_PIN_TRST|JTAG_PIN_SRST; //passive state high
-  JTAG_DIR=JTAG_OUTPUT_MASK; 
-  dataFromHostSize=0;
-  dataToHostSize=0;
-  resetJtagTransfers=0;
-}
-
-//! send taps through JTAG interface and recieve responce from TDO pin only
-//! \parameter out_buffer - buffer of taps for output, data is packed TDI and TMS values a stored together 
-//! \parameter out_length - total number of pairs to send (maximum length is 4*255 samples)
-//! \parameter in_buffer  - buffer which will hold recieved data data will be packed 
-//! \return    number of bytes used in the in_buffer 
-uint8_t jtag_tap_output_max_speed(const uint8_t *out_buffer, uint16_t out_length, uint8_t *in_buffer)
-{
-  uint16_t i;
-  
-#ifdef      DEBUG
-  printf("Sending %d bits \r\n", dataFromHostSize);
-#endif
-  
-  for(i=0 ; i<out_length ; i++ )
-  {
-    uint8_t index=i/4;
-    uint8_t bit=  (i%4)*2;
-
-    uint8_t index2=i/8;
-    uint8_t bit2=  i%8;
-
-    uint8_t tdi=(out_buffer[index]>>bit    )&1;
-    uint8_t tms=(out_buffer[index]>>(bit+1))&1;
-
-    JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) )
-               | (tdi<<JTAG_PIN_TDI)
-               | (tms<<JTAG_PIN_TMS);
-
-    JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-
-    asm("nop");
-
-    JTAG_OUT&=JTAG_CLK_LO;//CLK lo
-    uint8_t data=JTAG_IN;
-    
-    if(!bit2)
-      in_buffer[index2]=0;
-    
-    in_buffer[index2] |= ((data>>JTAG_PIN_TDO)&1)<<bit2;
-  }
-  
-  return (out_length+7)/8;
-}
-
-//! send taps through JTAG interface and recieve responce from TDO pin only
-//! \parameter out_buffer - buffer of taps for output, data is packed TDI and TMS values a stored together 
-//! \parameter out_length - total number of pairs to send (maximum length is 4*255 samples)
-//! \parameter in_buffer  - buffer which will hold recieved data data will be packed 
-//! \return    number of bytes used in the in_buffer 
-uint8_t jtag_tap_output_with_delay(const uint8_t *out_buffer, uint16_t out_length, uint8_t *in_buffer)
-{
-  uint16_t i;
-  
-#ifdef      DEBUG
-  printf("Sending %d bits \r\n", dataFromHostSize);
-#endif
-  
-  for(i=0 ; i<out_length ; i++ )
-  {
-    uint8_t index=i/4;
-    uint8_t bit=  (i%4)*2;
-
-    uint8_t index2=i/8;
-    uint8_t bit2=  i%8;
-
-    uint8_t tdi=(out_buffer[index]>>bit    )&1;
-    uint8_t tms=(out_buffer[index]>>(bit+1))&1;
-
-    JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) )
-               | (tdi<<JTAG_PIN_TDI)
-               | (tms<<JTAG_PIN_TMS);
-
-    JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-    _delay_loop_2(jtag_delay);
-
-    JTAG_OUT&=JTAG_CLK_LO;//CLK lo
-
-		_delay_loop_2(jtag_delay);
-    uint8_t data=JTAG_IN;
-    
-    if(!bit2)
-      in_buffer[index2]=0;
-    
-    in_buffer[index2] |= ((data>>JTAG_PIN_TDO)&1)<<bit2;
-  }
-  
-  return (out_length+7)/8;
-}
-
-
-//! send taps through JTAG interface and recieve responce from TDO and EMU pins 
-//! \parameter out_buffer - buffer of taps for output, data is packed TDI and TMS values a stored together 
-//! \parameter out_length - total number of pairs to send (maximum length is 4*255 samples)
-//! \parameter in_buffer  - buffer which will hold recieved data data will be packed 
-//! \return    number of bytes used in the in_buffer (equal to the input (length+3)/4
-uint8_t jtag_tap_output_emu(const uint8_t *out_buffer,uint16_t out_length,uint8_t *in_buffer)
-{
-  uint16_t i;
-  
-  for(i=0 ; i<out_length ; i++ )
-  {
-    uint8_t index=i/4;
-    uint8_t bit=(i%4)*2;
-
-    uint8_t tdi=(out_buffer[index]>>bit)&1;
-    uint8_t tms=(out_buffer[index]>>(bit+1))&1;
-
-    JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) )
-        | (tdi<<JTAG_PIN_TDI)
-        | (tms<<JTAG_PIN_TMS);
-
-    if(jtag_delay>0) _delay_loop_2(jtag_delay);
-
-    JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-    if(jtag_delay>0) _delay_loop_2(jtag_delay);
-
-
-    JTAG_OUT&=JTAG_CLK_LO;//CLK lo
-    uint8_t data=JTAG_IN;
-    
-    if(!bit)
-      in_buffer[index]=0;
-    
-    in_buffer[index] |= ((data>>JTAG_PIN_TDO)&1)<<(bit) |
-       ((data>>JTAG_PIN_EMU)&1)<<(bit+1);
-  }
-  return (out_length+3)/4;
-}
-
-//! return current status of TDO & EMU pins
-//! \return packed result TDO - bit 0 , EMU bit 1
-uint8_t jtag_read_input(void)
-{
-    uint8_t data=JTAG_IN;
-    return ((data>>JTAG_PIN_TDO)&1)|(((data>>JTAG_PIN_EMU)&1)<<1);
-} 
-
-//! set pin TRST 
-void jtag_set_trst(uint8_t trst)
-{
-  JTAG_OUT= (JTAG_OUT&(~(1<<JTAG_PIN_TRST)))|(trst<<JTAG_PIN_TRST);
-} 
-
-//! set pin SRST 
-void jtag_set_srst(uint8_t srst)
-{
-  JTAG_OUT=(JTAG_OUT&(~(1<<JTAG_PIN_SRST))) |(srst<<JTAG_PIN_SRST);
-} 
-
-void jtag_set_trst_srst(uint8_t trst,uint8_t srst)
-{
-  JTAG_OUT=(JTAG_OUT&(~ ((1<<JTAG_PIN_SRST)|(1<<JTAG_PIN_TRST)) ))| 
-           (srst<<JTAG_PIN_SRST)|(trst<<JTAG_PIN_TRST);
-}
 
 /** Main program entry point. This routine configures the hardware required by the application, then
  *  starts the scheduler to run the USB management task.
@@ -298,6 +92,10 @@ int main(void)
 	for (i = 0; i < OUT_EP_SIZE; i++) {
 		dataToHost[i] = 0;
 	}
+  dataFromHostSize=0;
+  dataToHostSize=0;
+  resetJtagTransfers=0;
+
 
  	/* Initialize Scheduler so that it can be used */
 	Scheduler_Init();
@@ -400,8 +198,7 @@ HANDLES_EVENT(USB_UnhandledControlPacket)
 				/* Finalize the transfer, acknowedge the host error or success OUT transfer */
 				Endpoint_ClearSetupOUT();
 			}
-
-			break;
+  		break;
 	}
 }
 
