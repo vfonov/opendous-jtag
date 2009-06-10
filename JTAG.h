@@ -19,7 +19,7 @@
 	#include <avr/io.h>
 	#include <avr/wdt.h>
 	#include <avr/power.h>
-  #include <util/delay_basic.h>
+	#include <util/delay_basic.h>
 	#include "Descriptors.h"
 
 	#include <LUFA/Version.h>				// Library Version Information
