@@ -1,6 +1,6 @@
 # Hey Emacs, this is a -*- makefile -*-
 #----------------------------------------------------------------------------
-# WinAVR Makefile Template written by Eric B. Weddington, Jerg Wunsch, et al.
+# WinAVR Makefile Template written by Eric B. Weddington, Jorg Wunsch, et al.
 #  >> Modified for use with the LUFA project. <<
 #
 # Released to the Public Domain
@@ -44,14 +44,6 @@
 # make flip-ee = Download the eeprom file to the device, using Atmel FLIP
 #                (must have Atmel FLIP installed).
 #
-# make win = Compile and run DeviceAccessC software under Windows
-#            (requires MingW and libusb-win32)
-#            (http://code.google.com/p/avropendous/wiki/SettingUpWindows)
-#
-# make linux = Compile and run DeviceAccessC software under Linux
-#            (requires libusb)
-#            (http://code.google.com/p/avropendous/wiki/SettingUpLinux)
-#
 # make doxygen = Generate DoxyGen documentation for the project (must have
 #                DoxyGen installed)
 #
@@ -66,19 +58,14 @@
 # To rebuild project do "make clean" then "make all".
 #----------------------------------------------------------------------------
 
-# LIBUSBSRC_ROOT is the directory where you extracted libusb-win32-src-0.1.12.1
-LIBUSBSRC_ROOT = "C:\Program Files\LibUSB-Win32"
-
-# LIBUSBSRC_ROOT_LIN is the install directory for libusb
-LIBUSBSRC_ROOT_LIN = /usr/lib
-
 
 # MCU name
-MCU = at90usb162 
+MCU = at90usb162
+#MCU = atmega32u4
+#MCU = at90usb647
 
-#MCU = atmega32u4 
 
-# Target board (see library BoardTypes.h documentation, USER or blank for projects not requiring
+# Target board (see library "Board Types" documentation, USER or blank for projects not requiring
 # LUFA board drivers). If USER is selected, put custom board drivers in a directory called 
 # "Board" inside the application directory.
 BOARD  = USER
@@ -90,8 +77,18 @@ BOARD  = USER
 #     calculate timings. Do NOT tack on a 'UL' at the end, this will be done
 #     automatically to create a 32-bit value in your source code.
 #     Typical values are:
+#         F_CPU =  1000000
+#         F_CPU =  1843200
+#         F_CPU =  2000000
+#         F_CPU =  3686400
+#         F_CPU =  4000000
+#         F_CPU =  7372800
 #         F_CPU =  8000000
+#         F_CPU = 11059200
+#         F_CPU = 14745600
 #         F_CPU = 16000000
+#         F_CPU = 18432000
+#         F_CPU = 20000000
 F_CPU = 8000000
 
 
@@ -128,19 +125,21 @@ LUFA_PATH = ../../libs
 
 
 # List C source files here. (C dependencies are automatically generated.)
-SRC = $(TARGET).c                                               \
-    jtag_functions.c                                            \
+SRC = $(TARGET).c                                                 \
 	  Descriptors.c                                               \
+	  jtag_functions.c                                            \
 	  $(LUFA_PATH)/LUFA/Scheduler/Scheduler.c                     \
-	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/LowLevel.c           \
-	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/Endpoint.c           \
 	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/DevChapter9.c        \
-	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/USBTask.c           \
-	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/USBInterrupt.c      \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/Endpoint.c           \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/Host.c               \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/HostChapter9.c       \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/LowLevel.c           \
+ 	  $(LUFA_PATH)/LUFA/Drivers/USB/LowLevel/Pipe.c               \
 	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/Events.c            \
-	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/StdDescriptors.c    \
-	  $(LUFA_PATH)/LUFA/Drivers/AT90USBXXX/Serial_Stream.c        \
-	  $(LUFA_PATH)/LUFA/Drivers/AT90USBXXX/Serial.c               \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/USBInterrupt.c      \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/USBTask.c           \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/HighLevel/ConfigDescriptor.c  \
+	  $(LUFA_PATH)/LUFA/Drivers/USB/Class/HIDParser.c             \
 
 
 # List C++ source files here. (C dependencies are automatically generated.)
@@ -188,6 +187,7 @@ CSTANDARD = -std=gnu99
 # Place -D or -U options here for C sources
 CDEFS  = -DF_CPU=$(F_CPU)UL -DF_CLOCK=$(F_CLOCK)UL -DBOARD=BOARD_$(BOARD)
 CDEFS += -DUSE_NONSTANDARD_DESCRIPTOR_NAMES -DNO_STREAM_CALLBACKS -DUSB_DEVICE_ONLY
+CDEFS += -DFIXED_CONTROL_ENDPOINT_SIZE=8 -DUSE_SINGLE_DEVICE_CONFIGURATION
 CDEFS += -DUSE_STATIC_OPTIONS="(USB_DEVICE_OPT_FULLSPEED | USB_OPT_REG_ENABLED | USB_OPT_AUTO_PLL)"
 
 
@@ -507,7 +507,7 @@ sizeafter:
 checkhooks: build
 	@echo
 	@echo ------- Unhooked LUFA Events -------
-	@$(shell) (grep -s '^Event.*LUFA/.*\\.o' $(TARGET).map | \
+	@$(shell) (grep -s '^EVENT_.*LUFA/.*\\.o' $(TARGET).map | \
 	           cut -d' ' -f1 | cut -d'_' -f2- | grep ".*") || \
 			   echo "(None)"
 	@echo ------------------------------------
@@ -530,20 +530,6 @@ checkboard:
 gccversion : 
 	@$(CC) --version
 
-
-# compile and run test software
-win:
-	echo ------------------------------
-	gcc -c DeviceAccessC.c -o DeviceAccessC.o -O2 -Wall -mno-cygwin -DVERSION_MAJOR=0 -DVERSION_MINOR=1 -DVERSION_MICRO=12 -DVERSION_NANO=1 -DINF_DATE='03/29/2008' -DINF_VERSION='0.1.12.1' -DDBG -I$(LIBUSBSRC_ROOT)/src -I$(LIBUSBSRC_ROOT)/src/driver -I$(LIBUSBSRC_ROOT)/
-	gcc -O2 -Wall -mno-cygwin -o DeviceAccessC.exe -I$(LIBUSBSRC_ROOT)/src  DeviceAccessC.o -s -mno-cygwin -L. -lusb -lgdi32 -luser32 -lcfgmgr32 -lsetupapi -lcomctl32
-	echo ------------------------------
-	DeviceAccessC.exe
-
-linux:
-	echo ------------------------------
-	gcc -DHAVE_CONFIG_H -I.. -I.. -g -O2 -g -Wall -MT DeviceAccessC.o -MD -MP -MF "./DeviceAccessC.Po" -c -o DeviceAccessC.o DeviceAccessC.c
-	libtool --mode=link gcc -g -O2 -g -Wall -o DeviceAccessC  DeviceAccessC.o $(LIBUSBSRC_ROOT_LIN)/libusb.la
-	./DeviceAccessC
 
 
 # Program the device.  
@@ -724,12 +710,7 @@ clean_list:
 	$(REMOVE) $(SRC:.c=.s)
 	$(REMOVE) $(SRC:.c=.d)
 	$(REMOVE) $(SRC:.c=.i)
-	$(REMOVE) DeviceAccessC
-	$(REMOVE) DeviceAccessC.exe
-	$(REMOVE) DeviceAccessC.Po
-	$(REMOVE) DeviceAccessC.o
 	$(REMOVEDIR) .dep
-	$(REMOVEDIR) .libs
 
 
 doxygen:

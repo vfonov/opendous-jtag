@@ -23,7 +23,6 @@
 	#include "Descriptors.h"
 
 	#include <LUFA/Version.h>				// Library Version Information
-	#include <LUFA/Common/ButtLoadTag.h>		// PROGMEM tags readable by the ButtLoad project
 	#include <LUFA/Drivers/USB/USB.h>            // USB Functionality
 	#include <LUFA/Scheduler/Scheduler.h>		// Simple scheduler for task management
 
@@ -37,11 +36,11 @@
 	TASK(USB_MainTask);
 
 	/* Event Handlers: */
-	HANDLES_EVENT(USB_Connect);
-	HANDLES_EVENT(USB_Reset);
-	HANDLES_EVENT(USB_Disconnect);
-	HANDLES_EVENT(USB_ConfigurationChanged);
-	HANDLES_EVENT(USB_UnhandledControlPacket);
+	void EVENT_USB_Connect(void);
+	void EVENT_USB_Reset(void);
+	void EVENT_USB_Disconnect(void);
+	void EVENT_USB_ConfigurationChanged(void);
+	void EVENT_USB_UnhandledControlPacket(void);
 
 	/* Function Prototypes: */
 
