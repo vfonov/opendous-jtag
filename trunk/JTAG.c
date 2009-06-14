@@ -21,17 +21,11 @@
 #include <stdio.h>
 #endif //DEBUG
 
-/* Project Tags, for reading out using the ButtLoad project */
-BUTTLOADTAG(ProjName,     "JTAG App");
-BUTTLOADTAG(BuildTime,    __TIME__);
-BUTTLOADTAG(BuildDate,    __DATE__);
-BUTTLOADTAG(LUFAVersion, "LUFA V" LUFA_VERSION_STRING);
-
 /* Scheduler Task List */
 TASK_LIST
 {
-	{ Task: USB_USBTask         , TaskStatus: TASK_STOP },
-	{ Task: USB_MainTask        , TaskStatus: TASK_STOP },
+	{ .Task= USB_USBTask         , .TaskStatus= TASK_STOP },
+	{ .Task= USB_MainTask        , .TaskStatus= TASK_STOP },
 };
 
 /* Global Variables */
@@ -112,7 +106,7 @@ int main(void)
 /** Event handler for the USB_Connect event. This indicates that the device is enumerating via the status LEDs and
  *  starts the library USB task to begin the enumeration and USB management process.
  */
-EVENT_HANDLER(USB_Connect)
+void EVENT_USB_Connect(void)
 {
  	/* Start USB management task */
 	Scheduler_SetTaskMode(USB_USBTask, TASK_RUN);
@@ -124,19 +118,19 @@ EVENT_HANDLER(USB_Connect)
  *  enumeration process begins, and enables the control endpoint interrupt so that control requests can be handled
  *  asynchronously when they arrive rather than when the control endpoint is polled manually.
  */
-EVENT_HANDLER(USB_Reset)
-{
-	/* Select the control endpoint */
-	Endpoint_SelectEndpoint(ENDPOINT_CONTROLEP);
+//void EVENT_USB_Reset(void)
+//{
+//	/* Select the control endpoint */
+//  Endpoint_SelectEndpoint(ENDPOINT_CONTROLEP);
 
 	/* Enable the endpoint SETUP interrupt ISR for the control endpoint */
-	USB_INT_Enable(ENDPOINT_INT_SETUP);
-}
+//	USB_INT_Enable(ENDPOINT_INT_SETUP);
+//}
 
 
 /** Event handler for the USB_Disconnect event.
  */
-EVENT_HANDLER(USB_Disconnect)
+void EVENT_USB_Disconnect(void)
 {
 	/* Stop running keyboard reporting and USB management tasks */
 	Scheduler_SetTaskMode(USB_MainTask, TASK_STOP);
@@ -146,7 +140,7 @@ EVENT_HANDLER(USB_Disconnect)
 /** Event handler for the USB_ConfigurationChanged event. This is fired when the host sets the current configuration
  *  of the USB device after enumeration, and configures the keyboard device endpoints.
  */
-EVENT_HANDLER(USB_ConfigurationChanged)
+void EVENT_USB_ConfigurationChanged(void)
 {
 	/* Setup Keyboard Keycode Report Endpoint */
 	Endpoint_ConfigureEndpoint(IN_EP, EP_TYPE_BULK,
@@ -179,31 +173,27 @@ EVENT_HANDLER(USB_ConfigurationChanged)
  *  control requests that are not handled internally by the USB library (including the HID commands, which are
  *  all issued via the control endpoint), so that they can be handled appropriately for the application.
  */
-HANDLES_EVENT(USB_UnhandledControlPacket)
+void EVENT_USB_UnhandledControlPacket(void)
 {
 	//NOTE - this is here as a template only, LoopBack does not make use of it
 
 	/* Handle HID Class specific requests here (these are Control EP requests) */
-	switch (bRequest)
+	switch (USB_ControlRequest.bRequest)
 	{
 		case 0x01:
-			if (bmRequestType == (REQDIR_DEVICETOHOST | REQTYPE_CLASS | REQREC_INTERFACE))
+			if (USB_ControlRequest.bmRequestType == (REQDIR_DEVICETOHOST | REQTYPE_CLASS | REQREC_INTERFACE))
 			{
-				Endpoint_ClearSetupReceived();
+				Endpoint_ClearSETUP();
 
         //TODO add reset code here
 				/* Write the report data to the control endpoint */
 				//Endpoint_Write_Control_Stream_LE(&dataToSend, sizeof(dataToSend));
         
 				/* Finalize the transfer, acknowedge the host error or success OUT transfer */
-				Endpoint_ClearSetupOUT();
+				Endpoint_ClearOUT();
 			}
   		break;
 	}
-}
-
-ISR(ENDPOINT_PIPE_vect)
-{
 }
 
 TASK(USB_MainTask)
@@ -216,26 +206,28 @@ TASK(USB_MainTask)
      
     Endpoint_SelectEndpoint(IN_EP);
 
-    if (dataToHostSize && Endpoint_ReadWriteAllowed())
+    if (dataToHostSize && Endpoint_IsReadWriteAllowed())
     {
       if(dataToHostSize)
         Endpoint_Write_Stream_LE(dataToHost,dataToHostSize);
       
       /* Handshake the IN Endpoint - send the data to the host */
-      Endpoint_ClearCurrentBank();
+      //Endpoint_ClearCurrentBank();
+      Endpoint_ClearIN();
       
       dataToHostSize=0;
     }
 
     Endpoint_SelectEndpoint(OUT_EP);
 
-    if (Endpoint_ReadWriteAllowed())
+    if (Endpoint_IsReadWriteAllowed())
     {
       if( (dataFromHostSize=Endpoint_BytesInEndpoint()) >0 )
       {
         Endpoint_Read_Stream_LE(dataFromHost,dataFromHostSize);
         /* Clear the endpoint buffer */
-        Endpoint_ClearCurrentBank();
+        //Endpoint_ClearCurrentBank();
+        Endpoint_ClearOUT();
         
         //first byte is always the command
         dataFromHostSize--;
