@@ -1,0 +1,95 @@
+diff --git a/configure.in b/configure.in
+index ecc9c6d..a6934c1 100644
+--- a/configure.in
++++ b/configure.in
+@@ -462,6 +462,10 @@ AC_ARG_ENABLE(jlink,
+   AS_HELP_STRING([--enable-jlink], [Enable building support for the Segger J-Link JTAG Programmer]),
+   [build_jlink=$enableval], [build_jlink=no])
+ 
++AC_ARG_ENABLE(opendous,
++  AS_HELP_STRING([--enable-opendous], [Enable building support for the opendous JTAG Programmer]),
++  [build_opendous=$enableval], [build_opendous=no])
++
+ AC_ARG_ENABLE(vsllink,
+   AS_HELP_STRING([--enable-vsllink], [Enable building support for the Versaloon-Link JTAG Programmer]),
+   [build_vsllink=$enableval], [build_vsllink=no])
+@@ -723,6 +727,12 @@ else
+   AC_DEFINE(BUILD_JLINK, 0, [0 if you don't want the J-Link JTAG driver.])
+ fi
+ 
++if test $build_opendous = yes; then
++  AC_DEFINE(BUILD_OPENDOUS, 1, [1 if you want the opendous JTAG driver.])
++else
++  AC_DEFINE(BUILD_OPENDOUS, 0, [0 if you don't want the opendous JTAG driver.])
++fi
++
+ if test $build_vsllink = yes; then
+   AC_DEFINE(BUILD_VSLLINK, 1, [1 if you want the Versaloon-Link JTAG driver.])
+ else
+@@ -1032,6 +1042,7 @@ AM_CONDITIONAL(PRESTO_DRIVER, test $build_presto_ftd2xx = yes -o $build_presto_l
+ AM_CONDITIONAL(USBPROG, test $build_usbprog = yes)
+ AM_CONDITIONAL(OOCD_TRACE, test $build_oocd_trace = yes)
+ AM_CONDITIONAL(JLINK, test $build_jlink = yes)
++AM_CONDITIONAL(OPENDOUS, test $build_opendous = yes)
+ AM_CONDITIONAL(VSLLINK, test $build_vsllink = yes)
+ AM_CONDITIONAL(RLINK, test $build_rlink = yes)
+ AM_CONDITIONAL(ARMJTAGEW, test $build_armjtagew = yes)
+diff --git a/src/Makefile.am b/src/Makefile.am
+index a566b4d..a6881b8 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -83,11 +83,15 @@ else
+ if VSLLINK
+ LIBUSB = -lusb
+ else
++if OPENDOUS
++LIBUSB = -lusb
++else
+ LIBUSB =
+ endif
+ endif
+ endif
+ endif
++endif
+ 
+ libopenocd_la_LIBADD = \
+ 	$(top_builddir)/src/xsvf/libxsvf.la \
+diff --git a/src/jtag/drivers/Makefile.am b/src/jtag/drivers/Makefile.am
+index d6113c6..32002d5 100644
+--- a/src/jtag/drivers/Makefile.am
++++ b/src/jtag/drivers/Makefile.am
+@@ -64,6 +64,10 @@ endif
+ if ARMJTAGEW
+ DRIVERFILES += arm-jtag-ew.c
+ endif
++if OPENDOUS
++DRIVERFILES += opendous.c
++endif
++
+ 
+ noinst_HEADERS = \
+ 	bitbang.h \
+diff --git a/src/jtag/interfaces.c b/src/jtag/interfaces.c
+index f6d8219..41fa793 100644
+--- a/src/jtag/interfaces.c
++++ b/src/jtag/interfaces.c
+@@ -91,6 +91,9 @@ extern struct jtag_interface rlink_interface;
+ #if BUILD_ARMJTAGEW == 1
+ extern struct jtag_interface armjtagew_interface;
+ #endif
++#if BUILD_OPENDOUS == 1
++extern struct jtag_interface opendous_interface;
++#endif
+ #endif // standard drivers
+ 
+ /**
+@@ -151,6 +154,9 @@ struct jtag_interface *jtag_interfaces[] = {
+ #if BUILD_ARMJTAGEW == 1
+ 		&armjtagew_interface,
+ #endif
++#if BUILD_OPENDOUS == 1
++    &opendous_interface,
++#endif
+ #endif // standard drivers
+ 		NULL,
+ 	};
