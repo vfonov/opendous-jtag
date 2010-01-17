@@ -30,15 +30,19 @@
 		{
 			USB_Descriptor_Configuration_Header_t Config;
 			USB_Descriptor_Interface_t            Interface;
-			USB_Descriptor_Endpoint_t             DataINEndpoint;
-			USB_Descriptor_Endpoint_t             DataOUTEndpoint;
+			USB_Descriptor_Endpoint_t             DataInEndpoint;
+			USB_Descriptor_Endpoint_t             DataOutEndpoint;
 		} USB_Descriptor_Configuration_t;
 
 	/* External Variables: */
 		extern USB_Descriptor_Configuration_t ConfigurationDescriptor;
 
 	/* Function Prototypes: */
+	/*
 		uint16_t CALLBACK_USB_GetDescriptor(const uint16_t wValue, const uint8_t wIndex, void** const DescriptorAddress)
-		                           ATTR_WARN_UNUSED_RESULT ATTR_NON_NULL_PTR_ARG(3);
+		                           ATTR_WARN_UNUSED_RESULT ATTR_NON_NULL_PTR_ARG(3);*/
+															 
+		uint16_t CALLBACK_USB_GetDescriptor(const uint16_t wValue, const uint8_t wIndex, void** const DescriptorAddress)
+											ATTR_WARN_UNUSED_RESULT ATTR_NON_NULL_PTR_ARG(3);															 
 
 #endif

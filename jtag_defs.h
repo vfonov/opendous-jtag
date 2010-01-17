@@ -27,6 +27,7 @@
 	#define JTAG_CMD_TAP_OUTPUT_EMU 0x4
 	#define JTAG_CMD_SET_DELAY      0x5
 	#define JTAG_CMD_SET_SRST_TRST  0x6
+	#define JTAG_CMD_READ_CONFIG    0x7
 
 	//JTAG usb command mask
 	#define JTAG_CMD_MASK       0x0f
@@ -42,5 +43,14 @@
 
 	//additional delay to make clk hi and lo approximately the same length, not sure if this is really needed
 	#define JTAG_DELAY2 20
+
+	typedef struct {
+		uint8_t version_major;
+		uint8_t version_minor;
+		uint16_t max_tap_length;
+	} opendous_jtag_config_t;
+
+	#define OPENDOUS_USB_BUFFER_SIZE 2000
+
 
 #endif //__JTAG_DEFS_H__
