@@ -50,7 +50,7 @@
 		uint16_t max_tap_length;
 	} opendous_jtag_config_t;
 
-	#define OPENDOUS_USB_BUFFER_SIZE 2000
+	#define OPENDOUS_USB_BUFFER_SIZE 360
 
 
 #endif //__JTAG_DEFS_H__
