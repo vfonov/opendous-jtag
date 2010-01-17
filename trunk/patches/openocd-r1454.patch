@@ -85,7 +85,7 @@ Index: src/jtag/opendous.c
 ===================================================================
 --- src/jtag/opendous.c	(revision 0)
 +++ src/jtag/opendous.c	(revision 0)
-@@ -0,0 +1,842 @@
+@@ -0,0 +1,895 @@
 +/***************************************************************************
 + *                                                                         *
 + *   Copyright (C) 2009 by Vladimir Fonov <vladimir.fonov@gmai.com>        * 
@@ -144,24 +144,30 @@ Index: src/jtag/opendous.c
 +#define OPENDOUS_WRITE_ENDPOINT	  0x02
 +#define OPENDOUS_READ_ENDPOINT    0x81
 +
-+#define OPENDOUS_USB_TIMEOUT	   	1000
++#define OPENDOUS_USB_TIMEOUT	   	10000
 +
-+#define OPENDOUS_IN_BUFFER_SIZE	  64
-+#define OPENDOUS_OUT_BUFFER_SIZE  64
 +
 +/* Global USB buffers */
-+static u8 usb_in_buffer[OPENDOUS_IN_BUFFER_SIZE];
-+static u8 usb_out_buffer[OPENDOUS_OUT_BUFFER_SIZE];
++static int opendous_usb_buffer_size=360;
++
++static u8 *usb_in_buffer=NULL;
++static u8 *usb_out_buffer=NULL;
++
++static int opendous_max_tap_transmit=350;
++static int opendous_max_input_data=350*4;
 +
 +/* Constants for OPENDOUS command */
 +
++#define OPENDOUS_IN_BUFFER_SIZE	  (opendous_usb_buffer_size)
++#define OPENDOUS_OUT_BUFFER_SIZE  (opendous_usb_buffer_size)
++
 +#define OPENDOUS_MAX_SPEED 				66
-+#define OPENDOUS_MAX_TAP_TRANSMIT 62  //even number is easier to handle
-+#define OPENDOUS_MAX_INPUT_DATA   (OPENDOUS_MAX_TAP_TRANSMIT*4)
++#define OPENDOUS_MAX_TAP_TRANSMIT (opendous_max_tap_transmit)  //even number is easier to handle
++#define OPENDOUS_MAX_INPUT_DATA   (opendous_max_input_data)
++#define MAX_PENDING_SCAN_RESULTS  (opendous_max_input_data)
 +
-+#define OPENDOUS_TAP_BUFFER_SIZE 65536
++#define OPENDOUS_TAP_BUFFER_SIZE 65535
 +
-+#define MAX_PENDING_SCAN_RESULTS (OPENDOUS_MAX_INPUT_DATA)
 +
 +//JTAG usb commans
 +#define JTAG_CMD_TAP_OUTPUT     0x0
@@ -171,7 +177,14 @@ Index: src/jtag/opendous.c
 +#define JTAG_CMD_TAP_OUTPUT_EMU 0x4
 +#define JTAG_CMD_SET_DELAY      0x5
 +#define JTAG_CMD_SET_SRST_TRST  0x6
++#define JTAG_CMD_READ_CONFIG    0x7
++//opendous jtag configuration	
 +
++typedef struct {
++		uint8_t version_major;
++		uint8_t version_minor;
++		uint16_t max_tap_length;
++	} opendous_jtag_config_t;
 +
 +/* External interface functions */
 +int opendous_execute_queue(void);
@@ -211,7 +224,7 @@ Index: src/jtag/opendous.c
 +void opendous_usb_close(opendous_jtag_t *opendous_jtag);
 +int opendous_usb_message(opendous_jtag_t *opendous_jtag, int out_length, int in_length);
 +int opendous_usb_write(opendous_jtag_t *opendous_jtag, int out_length);
-+int opendous_usb_read(opendous_jtag_t *opendous_jtag);
++int opendous_usb_read(opendous_jtag_t *opendous_jtag,int  in_length);
 +int opendous_usb_read_emu_result(opendous_jtag_t *opendous_jtag);
 +
 +/* helper functions */
@@ -222,6 +235,24 @@ Index: src/jtag/opendous.c
 +#endif
 +
 +opendous_jtag_t* opendous_jtag_handle;
++
++static int tap_length;
++static u8 tms_buffer[OPENDOUS_TAP_BUFFER_SIZE];
++static u8 tdo_buffer[OPENDOUS_TAP_BUFFER_SIZE];
++
++typedef struct
++{
++	int first;	/* First bit position in tdo_buffer to read */
++	int length; /* Number of bits to read */
++	scan_command_t *command; /* Corresponding scan command */
++	u8 *buffer;
++} pending_scan_result_t;
++
++static int pending_scan_results_length;
++static pending_scan_result_t* pending_scan_results_buffer=NULL;
++
++static int last_tms;
++
 +
 +/***************************************************************************/
 +/* External interface implementation */
@@ -368,7 +399,11 @@ Index: src/jtag/opendous.c
 +{
 +	int check_cnt;
 +  unsigned char dummy=0;
-+
++  
++	usb_in_buffer=malloc(opendous_usb_buffer_size);
++	usb_out_buffer=malloc(opendous_usb_buffer_size);
++	pending_scan_results_buffer=malloc(sizeof(pending_scan_result_t)*opendous_max_input_data);
++	
 +	opendous_jtag_handle = opendous_usb_open();
 +
 +	if (opendous_jtag_handle == 0)
@@ -390,10 +425,8 @@ Index: src/jtag/opendous.c
 +			opendous_get_status();
 +			break;
 +		}
-+
 +		check_cnt++;
 +	}
-+
 +	LOG_INFO("OPENDOUS JTAG Interface ready");
 +
 +	opendous_reset(0, 0);
@@ -558,10 +591,11 @@ Index: src/jtag/opendous.c
 +
 +	DEBUG_JTAG_IO("0x%02x 0x%02x", command,_data);
 +
-+	usb_out_buffer[0] = command;
-+	usb_out_buffer[1] = _data;
++  *(uint16_t*)&usb_out_buffer[0] = 2;
++	usb_out_buffer[2] = command;
++	usb_out_buffer[3] = _data;
 +
-+	result = opendous_usb_message(opendous_jtag_handle, 2, 1);
++	result = opendous_usb_message(opendous_jtag_handle, 4, 1);
 +	if (result != 1)
 +	{
 +		LOG_ERROR("Opendous command 0x%02x failed (%d)", command, result);
@@ -594,11 +628,37 @@ Index: src/jtag/opendous.c
 +		LOG_ERROR("J-Link command EMU_CMD_GET_STATE failed (%d)\n", result);
 +	}
 +*/
++
++
 +	return ERROR_OK;
 +}
 +
 +int opendous_get_version_info(void)
 +{
++	int result;
++	
++  *(uint16_t*)&usb_out_buffer[0] = 2;
++	usb_out_buffer[2] = JTAG_CMD_READ_CONFIG;
++	usb_out_buffer[3] = 0;
++	
++	if( (result=opendous_usb_message(opendous_jtag_handle, 4, sizeof( opendous_jtag_config_t) ))!=sizeof(opendous_jtag_config_t))
++	{
++		LOG_ERROR("Opendous command 0x%02x failed (%d)", JTAG_CMD_READ_CONFIG, result);
++	} else {
++		opendous_jtag_config_t *opendous_config=(opendous_jtag_config_t *)usb_in_buffer;
++		LOG_INFO("Opendous JTAG version %d.%d maximum tap length=%d\n",opendous_config->version_major,
++		         opendous_config->version_minor,
++		         opendous_config->max_tap_length);
++		         
++		opendous_max_input_data=opendous_config->max_tap_length;
++		opendous_max_tap_transmit=opendous_max_input_data/4;
++	 	opendous_usb_buffer_size=opendous_max_input_data+10;
++	 	
++		usb_in_buffer=realloc(usb_in_buffer,	opendous_usb_buffer_size);
++		usb_out_buffer=realloc(usb_out_buffer,	opendous_usb_buffer_size);
++		
++		pending_scan_results_buffer=realloc(pending_scan_results_buffer,sizeof(pending_scan_result_t)*opendous_max_input_data);
++	}
 +  return ERROR_OK;
 +}
 +
@@ -617,23 +677,6 @@ Index: src/jtag/opendous.c
 +/* Opendous tap functions */
 +
 +
-+static int tap_length;
-+static u8 tms_buffer[OPENDOUS_TAP_BUFFER_SIZE];
-+static u8 tdo_buffer[OPENDOUS_TAP_BUFFER_SIZE];
-+
-+typedef struct
-+{
-+	int first;	/* First bit position in tdo_buffer to read */
-+	int length; /* Number of bits to read */
-+	scan_command_t *command; /* Corresponding scan command */
-+	u8 *buffer;
-+} pending_scan_result_t;
-+
-+
-+static int pending_scan_results_length;
-+static pending_scan_result_t pending_scan_results_buffer[MAX_PENDING_SCAN_RESULTS];
-+
-+static int last_tms;
 +
 +void opendous_tap_init(void)
 +{
@@ -723,17 +766,18 @@ Index: src/jtag/opendous.c
 +				 {
 +						 transmit=OPENDOUS_MAX_TAP_TRANSMIT;
 +						 recieve=(OPENDOUS_MAX_TAP_TRANSMIT)/2;
-+						 usb_out_buffer[0]=JTAG_CMD_TAP_OUTPUT;
++						 usb_out_buffer[2]=JTAG_CMD_TAP_OUTPUT;
 +
 +				 }  else {
 +
-+						 usb_out_buffer[0]=JTAG_CMD_TAP_OUTPUT | ((tap_length%4)<<4);
++						 usb_out_buffer[2]=JTAG_CMD_TAP_OUTPUT | ((tap_length%4)<<4);
 +						 recieve=(transmit+1)/2;
 +				 }
-+
-+				 memmove(usb_out_buffer+1,tms_buffer+j,transmit);
++         
++         *(uint16_t *)&usb_out_buffer[0]=transmit+1;
++				 memmove(usb_out_buffer+3,tms_buffer+j,transmit);
 +				 //LOG_INFO("OPENDOUS sending %d",1 + transmit);
-+				 result = opendous_usb_message(opendous_jtag_handle, 1 + transmit, recieve);
++				 result = opendous_usb_message(opendous_jtag_handle,3 + transmit, recieve);
 +				 //LOG_INFO("OPENDOUS got %d",result);
 +				 if(result!=recieve)
 +				 {
@@ -851,7 +895,7 @@ Index: src/jtag/opendous.c
 +	result = opendous_usb_write(opendous_jtag, out_length);
 +	if (result == out_length)
 +	{
-+		result = opendous_usb_read(opendous_jtag);
++		result = opendous_usb_read(opendous_jtag,in_length);
 +    if (result == in_length)
 +    {
 +      return result;
@@ -880,10 +924,9 @@ Index: src/jtag/opendous.c
 +		return -1;
 +	}
 +
-+	result = usb_bulk_write(opendous_jtag->usb_handle, OPENDOUS_WRITE_ENDPOINT, \
-+		usb_out_buffer, out_length, OPENDOUS_USB_TIMEOUT);
++	result = usb_bulk_write(opendous_jtag->usb_handle, OPENDOUS_WRITE_ENDPOINT, usb_out_buffer, out_length, OPENDOUS_USB_TIMEOUT);
 +
-+	DEBUG_JTAG_IO("opendous_usb_write, out_length = %d, result = %d", out_length, result);
++	//LOG_ERROR("opendous_usb_write, out_length = %d, result = %d", out_length, result);
 +
 +#ifdef _DEBUG_USB_COMMS_
 +	//opendous_debug_buffer(usb_out_buffer, out_length);
@@ -892,18 +935,28 @@ Index: src/jtag/opendous.c
 +}
 +
 +/* Read data from USB into in_buffer. */
-+int opendous_usb_read(opendous_jtag_t *opendous_jtag)
++int opendous_usb_read(opendous_jtag_t *opendous_jtag,int size)
 +{
-+	int result = usb_bulk_read(opendous_jtag->usb_handle, OPENDOUS_READ_ENDPOINT, \
-+		
-+  usb_in_buffer, OPENDOUS_IN_BUFFER_SIZE, OPENDOUS_USB_TIMEOUT);
-+
-+	DEBUG_JTAG_IO("opendous_usb_read, result = %d", result);
++  int result;
++  int done=0;
++  //while(done<size)
++  {
++    result = usb_bulk_read(opendous_jtag->usb_handle, OPENDOUS_READ_ENDPOINT, usb_in_buffer+done, OPENDOUS_IN_BUFFER_SIZE-done, OPENDOUS_USB_TIMEOUT);
++    if(result<0)
++    {
++      LOG_ERROR("usb_bulk_read returned: %d , failed to read\n", result);
++      //break;
++      //continue;
++      //break;
++    }
++    done+=result;
++  }
++	DEBUG_JTAG_IO("opendous_usb_read, result = %d", done);
 +
 +#ifdef _DEBUG_USB_COMMS_
 +	//opendous_debug_buffer(usb_in_buffer, result);
 +#endif
-+	return result;
++	return done;
 +}
 +
 +//#ifdef _DEBUG_USB_COMMS_

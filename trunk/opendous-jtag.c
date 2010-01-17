@@ -1,36 +1,24 @@
 /*
-     Copyright (C) Vladimir Fonov, 2009.
-              
- vladimir <dot> fonov <at> gmail <dot> com
-      www.ilmarin.info
-
- Released under the MIT Licence
+		opendous-jtag by Vladimir S. Fonov, based on
+    eStick-jtag, by Cahya Wirawan <cahya@gmx.at> 
+    Based on opendous-jtag by Vladimir Fonov and LUFA demo applications by Dean Camera and Denver Gingerich.
+    Released under the MIT Licence.
 */
 
-/*
-    JTAG
-    Based on LUFA demo applications by Dean Camera and Denver Gingerich.
-*/
-
-#include "JTAG.h"
+#include "opendous-jtag.h"
 #include "jtag_defs.h"
 #include "jtag_functions.h"
 
 #ifdef DEBUG
-#include <LUFA/Drivers/AT90USBXXX/Serial_Stream.h>
+#include <LUFA/Drivers/Peripheral/SerialStream.h>
 #include <stdio.h>
 #endif //DEBUG
 
-/* Scheduler Task List */
-TASK_LIST
-{
-	{ .Task= USB_USBTask         , .TaskStatus= TASK_STOP },
-	{ .Task= USB_MainTask        , .TaskStatus= TASK_STOP },
-};
-
 /* Global Variables */
-uint8_t  dataFromHost[IN_EP_SIZE];
-uint8_t  dataToHost[OUT_EP_SIZE];
+
+uint8_t  usbBuffer[OPENDOUS_USB_BUFFER_SIZE+OPENDOUS_USB_BUFFER_OFFSET];
+uint8_t  *dataFromHost = usbBuffer+OPENDOUS_USB_BUFFER_OFFSET;
+uint8_t  *dataToHost = usbBuffer;
 uint16_t dataFromHostSize=0;
 uint16_t dataToHostSize=0;
 
@@ -67,8 +55,8 @@ int main(void)
 	#endif
   
   //HWB
-  DDRD = 1;
-  PORTD = (1 << 7); // only PB7(HWB) should be High as this is the bootloader pin
+  DDRD = 1|(1<<1);
+  PORTD = (1 << 7)|(1<<1); // only PB7(HWB) should be High as this is the bootloader pin
 
   jtag_init();
 
@@ -78,39 +66,39 @@ int main(void)
 #endif //DEBUG
   
 	// initialize the send and receive buffers
-	uint8_t i = 0;
-	for (i = 0; i < IN_EP_SIZE; i++) {
+	uint16_t i = 0;
+	for (i = 0; i < OPENDOUS_OUT_BUFFER_SIZE; i++) {
 		dataFromHost[i] = 0;
 	}
 
-	for (i = 0; i < OUT_EP_SIZE; i++) {
+	for (i = 0; i < OPENDOUS_IN_BUFFER_SIZE; i++) {
 		dataToHost[i] = 0;
 	}
   dataFromHostSize=0;
   dataToHostSize=0;
   resetJtagTransfers=0;
 
-
- 	/* Initialize Scheduler so that it can be used */
-	Scheduler_Init();
-
 	/* Initialize USB Subsystem */
 	USB_Init();
+
 #ifdef DEBUG
-	printf("Starting JTAG\r\n");
+	printf("Starting OPENDOUS-jtag\r\n");
 #endif //DEBUG
-	/* Scheduling - routine never returns, so put this last in the main function */
-	Scheduler_Start();
+	while(1)
+	{
+		JTAG_Task();
+		USB_USBTask();
+	}
 }
 
 /** Event handler for the USB_Connect event. This indicates that the device is enumerating via the status LEDs and
  *  starts the library USB task to begin the enumeration and USB management process.
  */
-void EVENT_USB_Connect(void)
+void EVENT_USB_Device_Connect(void)
 {
- 	/* Start USB management task */
-	Scheduler_SetTaskMode(USB_USBTask, TASK_RUN);
-	Scheduler_SetTaskMode(USB_MainTask, TASK_RUN);
+#ifdef DEBUG
+	printf("Starting OPENDOUS-connected\r\n");
+#endif //DEBUG
 }
 
 
@@ -118,101 +106,80 @@ void EVENT_USB_Connect(void)
  *  enumeration process begins, and enables the control endpoint interrupt so that control requests can be handled
  *  asynchronously when they arrive rather than when the control endpoint is polled manually.
  */
-//void EVENT_USB_Reset(void)
-//{
-//	/* Select the control endpoint */
-//  Endpoint_SelectEndpoint(ENDPOINT_CONTROLEP);
-
-	/* Enable the endpoint SETUP interrupt ISR for the control endpoint */
-//	USB_INT_Enable(ENDPOINT_INT_SETUP);
-//}
+void EVENT_USB_Device_Reset(void)
+{
+	//TODO: reset JTAG control(?)
+#ifdef DEBUG
+	printf("Starting OPENDOUS-reset\r\n");
+#endif //DEBUG
+}
 
 
 /** Event handler for the USB_Disconnect event.
  */
-void EVENT_USB_Disconnect(void)
+void EVENT_USB_Device_Disconnect(void)
 {
-	/* Stop running keyboard reporting and USB management tasks */
-	Scheduler_SetTaskMode(USB_MainTask, TASK_STOP);
-	Scheduler_SetTaskMode(USB_USBTask, TASK_STOP);
+#ifdef DEBUG
+	printf("Starting OPENDOUS-disconnected\r\n");
+#endif //DEBUG
+
 }
 
 /** Event handler for the USB_ConfigurationChanged event. This is fired when the host sets the current configuration
  *  of the USB device after enumeration, and configures the keyboard device endpoints.
  */
-void EVENT_USB_ConfigurationChanged(void)
+void EVENT_USB_Device_ConfigurationChanged(void)
 {
 	/* Setup Keyboard Keycode Report Endpoint */
 	Endpoint_ConfigureEndpoint(IN_EP, EP_TYPE_BULK,
 								ENDPOINT_DIR_IN, IN_EP_SIZE,
 								ENDPOINT_BANK_SINGLE);
 
-	/* Enable the endpoint IN interrupt ISR for data being sent TO the host */
-	//USB_INT_Enable(ENDPOINT_INT_IN);
-
 	/* Setup Keyboard LED Report Endpoint */
 	Endpoint_ConfigureEndpoint(OUT_EP, EP_TYPE_BULK,
 								ENDPOINT_DIR_OUT, OUT_EP_SIZE,
 								ENDPOINT_BANK_SINGLE);
 
-	/* Enable the endpoint OUT interrupt ISR for data recevied FROM the host */
-	//USB_INT_Enable(ENDPOINT_INT_OUT);
-
-	/* start USB_USBTask */
-	Scheduler_SetTaskMode(USB_MainTask, TASK_RUN);
   
   // pull lines TRST and SRST high
-  JTAG_OUT=(1<<JTAG_PIN_TRST)|(1<<JTAG_PIN_SRST);
+  jtag_init();
+#ifdef DEBUG
+	printf("Starting OPENDOUS-conf changed\r\n");
+#endif //DEBUG
   
 }
 
 
 //TODO: add possibility to abor current JTAG sequence and reset the pins
-
-/** Event handler for the USB_UnhandledControlPacket event. This is used to catch standard and class specific
- *  control requests that are not handled internally by the USB library (including the HID commands, which are
- *  all issued via the control endpoint), so that they can be handled appropriately for the application.
- */
-void EVENT_USB_UnhandledControlPacket(void)
+void EVENT_USB_Device_UnhandledControlRequest(void)
 {
-	//NOTE - this is here as a template only, LoopBack does not make use of it
-
-	/* Handle HID Class specific requests here (these are Control EP requests) */
 	switch (USB_ControlRequest.bRequest)
 	{
-		case 0x01:
-			if (USB_ControlRequest.bmRequestType == (REQDIR_DEVICETOHOST | REQTYPE_CLASS | REQREC_INTERFACE))
-			{
-				Endpoint_ClearSETUP();
-
-        //TODO add reset code here
-				/* Write the report data to the control endpoint */
-				//Endpoint_Write_Control_Stream_LE(&dataToSend, sizeof(dataToSend));
-        
-				/* Finalize the transfer, acknowedge the host error or success OUT transfer */
-				Endpoint_ClearOUT();
-			}
-  		break;
 	}
+#ifdef DEBUG
+	printf("Starting OPENDOUS-EVENT_USB_Device_UnhandledControlRequest\r\n");
+#endif //DEBUG
+
 }
 
-TASK(USB_MainTask)
-{
+void JTAG_Task(void)
+{	
+	if (USB_DeviceState != DEVICE_STATE_Configured)
+	  return;
+
 	/* Check if the USB System is connected to a Host */
-	if (USB_IsConnected)
+	//if (USB_DeviceState == DEVICE_STATE_Configured  )
 	{
-		/* process data or do something generally useful */
-		/* note that TASK(USB_MainTask) will be periodically executed when no other tasks or functions are running */
-     
     Endpoint_SelectEndpoint(IN_EP);
 
-    if (dataToHostSize && Endpoint_IsReadWriteAllowed())
+    if(dataToHostSize && Endpoint_IsReadWriteAllowed())
     {
-      if(dataToHostSize)
-        Endpoint_Write_Stream_LE(dataToHost,dataToHostSize);
-      
+#ifdef DEBUG
+			printf("Sending to host :%d \r\n",dataToHostSize);
+#endif //DEBUG
+      Endpoint_Write_Stream_LE(dataToHost,dataToHostSize);
+    
       /* Handshake the IN Endpoint - send the data to the host */
-      //Endpoint_ClearCurrentBank();
       Endpoint_ClearIN();
       
       dataToHostSize=0;
@@ -220,15 +187,17 @@ TASK(USB_MainTask)
 
     Endpoint_SelectEndpoint(OUT_EP);
 
-    if (Endpoint_IsReadWriteAllowed())
+    if(Endpoint_IsReadWriteAllowed())
     {
-      if( (dataFromHostSize=Endpoint_BytesInEndpoint()) >0 )
-      {
-        Endpoint_Read_Stream_LE(dataFromHost,dataFromHostSize);
-        /* Clear the endpoint buffer */
-        //Endpoint_ClearCurrentBank();
-        Endpoint_ClearOUT();
-        
+		  dataFromHostSize = Endpoint_Read_Word_LE();
+#ifdef DEBUG
+			printf("Data :%d ",dataFromHostSize);
+#endif //DEBUG
+		  Endpoint_Read_Stream_LE(dataFromHost, dataFromHostSize);
+		  Endpoint_ClearOUT();
+
+		  if(dataFromHostSize>0)
+      {        
         //first byte is always the command
         dataFromHostSize--;
         
@@ -239,19 +208,23 @@ TASK(USB_MainTask)
           
         case JTAG_CMD_TAP_OUTPUT:
           
+#ifdef DEBUG
+					printf("JTAG_CMD_TAP_OUTPUT\r\n ");
+#endif //DEBUG
           dataFromHostSize*=4;
 
           if( dataFromHost[0] & JTAG_DATA_MASK )
             dataFromHostSize-= (4- ((dataFromHost[0] & JTAG_DATA_MASK)>>4));
-          
-					if(jtag_delay)
-						dataToHostSize= jtag_tap_output_with_delay( &dataFromHost[1] , dataFromHostSize, dataToHost);
-					else
-						dataToHostSize= jtag_tap_output_max_speed( &dataFromHost[1] , dataFromHostSize, dataToHost);
-          
+          if(jtag_delay)
+            dataToHostSize= jtag_tap_output_with_delay( &dataFromHost[1] , dataFromHostSize, dataToHost);
+          else
+            dataToHostSize= jtag_tap_output_max_speed( &dataFromHost[1] , dataFromHostSize, dataToHost);
           break;
           
         case JTAG_CMD_TAP_OUTPUT_EMU:
+#ifdef DEBUG
+					printf("JTAG_CMD_TAP_OUTPUT_EMU\r\n ");
+#endif //DEBUG
           dataFromHostSize*=4;
           if(dataFromHost[0]&JTAG_DATA_MASK)
             dataFromHostSize-=(4- ((dataFromHost[0]&JTAG_DATA_MASK)>>4));
@@ -261,33 +234,58 @@ TASK(USB_MainTask)
           break;
           
         case JTAG_CMD_READ_INPUT:
+#ifdef DEBUG
+					printf("JTAG_CMD_READ_INPUT\r\n ");
+#endif //DEBUG
           dataToHost[0]=jtag_read_input();
           dataToHostSize=1;
           break;
         
         case JTAG_CMD_SET_SRST:
+#ifdef DEBUG
+					printf("JTAG_CMD_SET_SRST\r\n ");
+#endif //DEBUG
           jtag_set_srst(dataFromHost[1]&1);
           dataToHost[0]=0;//TODO: what to output here?
           dataToHostSize=1;
           break;
         
         case JTAG_CMD_SET_TRST:
+#ifdef DEBUG
+					printf("JTAG_CMD_SET_TRST\r\n ");
+#endif //DEBUG
           jtag_set_trst(dataFromHost[1]&1);
           dataToHost[0]=0;//TODO: what to output here?
           dataToHostSize=1;
           break;
         
         case JTAG_CMD_SET_DELAY:
-          jtag_delay=dataFromHost[1]*256+dataFromHost[2];
+#ifdef DEBUG
+					printf("JTAG_CMD_SET_DELAY\r\n ");
+#endif //DEBUG
+          jtag_delay=dataFromHost[1]*256;
           dataToHost[0]=0;//TODO: what to output here?
           dataToHostSize=1;
-
+          break;
         case JTAG_CMD_SET_SRST_TRST:
+#ifdef DEBUG
+					printf("JTAG_CMD_SET_SRST_TRST\r\n ");
+#endif //DEBUG
           jtag_set_trst_srst(dataFromHost[1]&2?1:0,dataFromHost[1]&1);
           dataToHost[0]=0;//TODO: what to output here?
           dataToHostSize=1;
-        
+        	break;
+				case JTAG_CMD_READ_CONFIG:
+#ifdef DEBUG
+					printf("JTAG_CMD_READ_CONFIG\r\n ");
+#endif //DEBUG
+					dataToHostSize=jtag_read_config(&dataToHost[0]);
+					break;
+					
         default: //REPORT ERROR?
+#ifdef DEBUG
+					printf("Unknown command\r\n ");
+#endif //DEBUG
           break;
         }
       }
