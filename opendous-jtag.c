@@ -36,30 +36,8 @@ int main(void)
 	/* Disable Clock Division */
 	clock_prescale_set(clock_div_1);
 
-	/* Hardware Initialization */
-	DDRD = 0;
-	PORTD = 0;
-	DDRB = 0;
-	PORTB = 0;
-	//DDRC |= ((0 << PC2) | (0 << PC4) | (0 << PC5) | (0 << PC6) | (0 << PC7));  //AT90USBxx2
-	//PORTC |= ((0 << PC2) | (0 << PC4) | (0 << PC5) | (0 << PC6) | (0 << PC7)); //AT90USBxx2
-	#if (BOARD == BOARD_USBKEY)
-		DDRA = 0;
-		PORTA = 0;
-		DDRE = 0;
-		PORTE = 0;
-		DDRF = 0;
-		PORTF = 0;
-		DDRC = 0;
-		PORTC = 0;
-	#endif
-  
-  //HWB
-  DDRD = 1|(1<<1);
-  PORTD = (1 << 7)|(1<<1); // only PB7(HWB) should be High as this is the bootloader pin
-
   jtag_init();
-
+  
   //DEBUG
 #ifdef DEBUG
   SerialStream_Init(9600,0);

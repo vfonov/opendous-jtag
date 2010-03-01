@@ -15,8 +15,13 @@ uint16_t jtag_delay=0;
 //! initialize JTAG interface
 void jtag_init(void)
 {
-  JTAG_OUT=JTAG_PIN_TRST|JTAG_PIN_SRST; //passive state high
+  JTAG_OUT=0;
   JTAG_DIR=JTAG_OUTPUT_MASK; 
+  JTAG_OUT=(1<<JTAG_PIN_TRST)|(1<<JTAG_PIN_SRST); //passive state high
+/*  while(1)
+  {
+    asm("nop");
+  }*/
 }
 
 //! send taps through JTAG interface and recieve responce from TDO pin only
@@ -45,7 +50,7 @@ uint16_t jtag_tap_output_max_speed(const uint8_t *out_buffer, uint16_t out_lengt
     tms_tdi = out_data & JTAG_SIGNAL_MASK;
     JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) ) | tms_tdi;
     JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-    asm("nop");
+    asm("nop");//asm("nop");asm("nop");
     JTAG_OUT&=JTAG_CLK_LO;//CLK lo
     
     in_data >>= 1;
@@ -61,7 +66,7 @@ uint16_t jtag_tap_output_max_speed(const uint8_t *out_buffer, uint16_t out_lengt
     tms_tdi = out_data & JTAG_SIGNAL_MASK;
     JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) ) | tms_tdi;
     JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-    asm("nop");
+    asm("nop");//asm("nop");asm("nop");
     JTAG_OUT&=JTAG_CLK_LO;//CLK lo
     
     in_data >>= 1;
@@ -77,7 +82,7 @@ uint16_t jtag_tap_output_max_speed(const uint8_t *out_buffer, uint16_t out_lengt
     tms_tdi = out_data & JTAG_SIGNAL_MASK;
     JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) ) | tms_tdi;
     JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-    asm("nop");
+    asm("nop");//asm("nop");asm("nop");
     JTAG_OUT&=JTAG_CLK_LO;//CLK lo
     
     in_data >>= 1;
@@ -93,7 +98,7 @@ uint16_t jtag_tap_output_max_speed(const uint8_t *out_buffer, uint16_t out_lengt
     tms_tdi = out_data & JTAG_SIGNAL_MASK;
     JTAG_OUT = ( JTAG_OUT & ( ~JTAG_SIGNAL_MASK ) ) | tms_tdi;
     JTAG_OUT|=JTAG_CLK_HI;//CLK hi
-    asm("nop");
+    asm("nop");//asm("nop");asm("nop");
     JTAG_OUT&=JTAG_CLK_LO;//CLK lo
     
     in_data >>= 1;
