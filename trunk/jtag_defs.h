@@ -6,7 +6,7 @@
 	#define JTAG_IN  PINB
 	#define JTAG_DIR DDRB
 
-	//ouput pins
+	//output pins
 	#define JTAG_PIN_TDI  0
 	#define JTAG_PIN_TMS  1
 	#define JTAG_PIN_TRST 2
@@ -15,7 +15,7 @@
 	//input pins
 	#define JTAG_PIN_TDO  5
 	#define JTAG_PIN_EMU  6
-	#define JTAG_PIN_RTCK 5
+	#define JTAG_PIN_RTCK 7
 
 	//JTAG usb commands
 	//TODO: ADD commands to deal with RTCK ?

@@ -60,9 +60,9 @@
 
 
 # MCU name
-#MCU = at90usb162
+MCU = at90usb162
 #MCU = atmega32u4
-MCU = at90usb647
+#MCU = at90usb647
 
 
 # Target board (see library "Board Types" documentation, USER or blank for projects not requiring
